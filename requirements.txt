@@ -1,0 +1,18 @@
+# 核心依赖
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# FunASR 引擎（默认，高精度）
+funasr>=1.0
+torch>=2.0
+torchaudio>=2.0
+modelscope>=1.10
+
+# Vosk 引擎（可选，轻量备用）
+vosk>=0.3.44
+
+# Windows 键盘模拟（macOS 使用内置 Quartz）
+pynput>=1.7.6
+
+# 打包
+pyinstaller>=6.0
