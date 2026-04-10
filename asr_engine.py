@@ -143,12 +143,12 @@ class FunASREngine(ASREngineBase):
     """
 
     CAPTURE_CHUNK = 1600        # 100ms @ 16kHz
-    SILENCE_DURATION = 0.45     # 说完后静默 450ms 视为语句结束
+    SILENCE_DURATION = 0.5      # 说完后静默 500ms 视为语句结束
     MIN_SPEECH_DURATION = 0.2   # 过滤极短噪音
     MAX_SPEECH_DURATION = 8.0   # 防止无限录制
-    NOISE_SMOOTH = 0.92         # 噪声底估计的平滑系数（静默时）
-    NOISE_SMOOTH_SPEAKING = 0.98  # 说话期间也缓慢更新噪声底，防止卡住
-    SPEECH_THRESHOLD_RATIO = 4.0
+    NOISE_SMOOTH = 0.92         # 噪声底估计的平滑系数
+    SPEECH_START_RATIO = 4.0    # 启动语音检测：能量 > 噪声底 × 此值
+    SPEECH_END_RATIO = 0.25     # 结束语音检测：能量 < 说话峰值 × 此值
     CALIBRATION_SECONDS = 0.5   # 启动后先采集环境噪音
 
     _FUNASR_MODEL_ID = (
@@ -246,12 +246,12 @@ class FunASREngine(ASREngineBase):
         buffer: list[np.ndarray] = []
         is_speaking = False
         silence_chunks = 0
+        speech_peak = 0.0
         chunk_sec = self.CAPTURE_CHUNK / self.sample_rate
         max_silence = int(self.SILENCE_DURATION / chunk_sec)
         max_speech_chunks = int(self.MAX_SPEECH_DURATION / chunk_sec)
         calibration_chunks = int(self.CALIBRATION_SECONDS / chunk_sec)
 
-        # 校准阶段：采集环境噪音建立基线
         noise_energy = self._calibrate_noise(calibration_chunks)
 
         while self._running:
@@ -260,34 +260,39 @@ class FunASREngine(ASREngineBase):
             except queue.Empty:
                 if is_speaking and buffer:
                     self._recognize_segment(buffer)
-                    buffer, is_speaking = [], False
+                    buffer, is_speaking, speech_peak = [], False, 0.0
                 continue
 
             energy = float(np.sqrt(np.mean(chunk ** 2)))
-            threshold = max(noise_energy * self.SPEECH_THRESHOLD_RATIO, 0.008)
+            start_threshold = max(noise_energy * self.SPEECH_START_RATIO, 0.008)
 
-            if energy > threshold:
-                if not is_speaking:
+            if not is_speaking:
+                if energy > start_threshold:
                     is_speaking = True
+                    speech_peak = energy
+                    silence_chunks = 0
+                    buffer.append(chunk)
                     if self._on_partial:
                         self._on_partial("(listening...)")
-                silence_chunks = 0
-                buffer.append(chunk)
-                # 说话期间也缓慢更新噪声底，防止阈值卡在过低值
-                noise_energy = (self.NOISE_SMOOTH_SPEAKING * noise_energy
-                                + (1 - self.NOISE_SMOOTH_SPEAKING) * energy)
-            elif is_speaking:
-                buffer.append(chunk)
-                silence_chunks += 1
-                if silence_chunks >= max_silence:
-                    self._recognize_segment(buffer)
-                    buffer, is_speaking, silence_chunks = [], False, 0
+                else:
+                    noise_energy = (self.NOISE_SMOOTH * noise_energy
+                                    + (1 - self.NOISE_SMOOTH) * energy)
             else:
-                noise_energy = self.NOISE_SMOOTH * noise_energy + (1 - self.NOISE_SMOOTH) * energy
+                buffer.append(chunk)
+                speech_peak = max(speech_peak, energy)
+                end_threshold = max(speech_peak * self.SPEECH_END_RATIO,
+                                    noise_energy * 1.5)
+                if energy < end_threshold:
+                    silence_chunks += 1
+                    if silence_chunks >= max_silence:
+                        self._recognize_segment(buffer)
+                        buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
+                else:
+                    silence_chunks = 0
 
-            if is_speaking and len(buffer) > max_speech_chunks:
-                self._recognize_segment(buffer)
-                buffer, is_speaking, silence_chunks = [], False, 0
+                if len(buffer) > max_speech_chunks:
+                    self._recognize_segment(buffer)
+                    buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
 
     def _calibrate_noise(self, num_chunks: int) -> float:
         """启动时采集环境噪音，返回噪声能量基线。"""
