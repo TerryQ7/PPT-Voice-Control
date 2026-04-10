@@ -6,10 +6,13 @@
 """
 
 import json
+import logging
 import os
+import platform
 import sys
 import queue
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
@@ -17,6 +20,9 @@ import numpy as np
 import sounddevice as sd
 
 from config import SAMPLE_RATE, BLOCK_SIZE
+
+logger = logging.getLogger("asr_engine")
+IS_WINDOWS = platform.system() == "Windows"
 
 
 class ASREngineBase(ABC):
@@ -143,14 +149,23 @@ class FunASREngine(ASREngineBase):
     """
 
     CAPTURE_CHUNK = 1600        # 100ms @ 16kHz
-    SILENCE_DURATION = 0.5      # 说完后静默 500ms → 送识别
     MIN_SPEECH_DURATION = 0.3   # 过滤极短噪音
-    FORCED_TIMEOUT = 2.5        # 兜底：说话后 2.5s 必定送识别（防 VAD 失灵）
+    FORCED_TIMEOUT = 2.5        # 兜底：说话后 2.5s 必定送识别
     MAX_SPEECH_DURATION = 6.0   # 绝对上限
     NOISE_SMOOTH = 0.92
-    SPEECH_START_RATIO = 5.0    # 开始检测：能量 > 噪声底 × 5
-    SPEECH_END_RATIO = 0.20     # 结束检测：能量 < 说话峰值 × 20%
     CALIBRATION_SECONDS = 0.6   # 启动后先采集环境噪音
+
+    # --- 平台自适应参数 ---
+    if IS_WINDOWS:
+        SPEECH_START_RATIO = 3.0        # Windows 麦克风增益高，降低起始阈值
+        START_THRESHOLD_CAP = 0.04      # 起始阈值上限，防止永远进不了说话态
+        SPEECH_END_RATIO = 0.40         # 放宽结束阈值，让段落更容易闭合
+        SILENCE_DURATION = 0.7          # Windows 上稍长的静默窗口
+    else:
+        SPEECH_START_RATIO = 5.0
+        START_THRESHOLD_CAP = float("inf")
+        SPEECH_END_RATIO = 0.20
+        SILENCE_DURATION = 0.5
 
     _FUNASR_MODEL_ID = (
         "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -169,25 +184,21 @@ class FunASREngine(ASREngineBase):
 
     def _find_model(self) -> str:
         """按优先级查找模型路径: 打包内置 → ModelScope 缓存 → 模型ID(自动下载)。"""
-        # 1) PyInstaller 打包后内置的模型
         if getattr(sys, "frozen", False):
             bundled = os.path.join(sys._MEIPASS, self._BUNDLED_MODEL_NAME)
             if os.path.isdir(bundled):
                 return bundled
 
-        # 2) 开发模式：项目目录下手动放置的模型
         local = os.path.join(os.path.dirname(os.path.abspath(__file__)), self._BUNDLED_MODEL_NAME)
         if os.path.isdir(local):
             return local
 
-        # 3) ModelScope 缓存
         cache = os.path.expanduser(
             f"~/.cache/modelscope/hub/models/{self._FUNASR_MODEL_ID}"
         )
         if os.path.isdir(cache):
             return cache
 
-        # 4) 回退到模型 ID，让 FunASR/ModelScope 自动下载
         return self._FUNASR_MODEL_ID
 
     def _load_model(self):
@@ -199,6 +210,7 @@ class FunASREngine(ASREngineBase):
         from funasr import AutoModel
 
         model_path = self._find_model()
+        logger.info("Loading model from: %s", model_path)
         self._model = AutoModel(model=model_path, device="cpu", disable_update=True)
 
     def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None]):
@@ -253,20 +265,37 @@ class FunASREngine(ASREngineBase):
         forced_chunks = int(self.FORCED_TIMEOUT / chunk_sec)
         max_speech_chunks = int(self.MAX_SPEECH_DURATION / chunk_sec)
         calibration_chunks = int(self.CALIBRATION_SECONDS / chunk_sec)
+        debug_counter = 0
 
         noise_energy = self._calibrate_noise(calibration_chunks)
+        logger.info("[VAD] calibrated noise=%.4f, platform=%s", noise_energy,
+                     "Windows" if IS_WINDOWS else "macOS/Linux")
+        if self._on_partial:
+            self._on_partial(f"[就绪] 噪声基线={noise_energy:.4f}")
 
         while self._running:
             try:
                 chunk = self._audio_queue.get(timeout=0.5)
             except queue.Empty:
                 if is_speaking and buffer:
+                    logger.info("[VAD] queue timeout while speaking, forcing recognize (%d chunks)", len(buffer))
                     self._recognize_segment(buffer)
                     buffer, is_speaking, speech_peak = [], False, 0.0
                 continue
 
             energy = float(np.sqrt(np.mean(chunk ** 2)))
-            start_threshold = max(noise_energy * self.SPEECH_START_RATIO, 0.01)
+            start_threshold = min(
+                max(noise_energy * self.SPEECH_START_RATIO, 0.008),
+                self.START_THRESHOLD_CAP,
+            )
+
+            # 每秒打印一次调试信息
+            debug_counter += 1
+            if debug_counter % 10 == 0:
+                logger.debug(
+                    "[VAD] energy=%.4f noise=%.4f start_th=%.4f speaking=%s buf=%d silence=%d",
+                    energy, noise_energy, start_threshold, is_speaking, len(buffer), silence_chunks,
+                )
 
             if not is_speaking:
                 if energy > start_threshold:
@@ -274,6 +303,7 @@ class FunASREngine(ASREngineBase):
                     speech_peak = energy
                     silence_chunks = 0
                     buffer.append(chunk)
+                    logger.info("[VAD] speech START energy=%.4f threshold=%.4f", energy, start_threshold)
                     if self._on_partial:
                         self._on_partial("(listening...)")
                 else:
@@ -283,26 +313,29 @@ class FunASREngine(ASREngineBase):
                 buffer.append(chunk)
                 speech_peak = max(speech_peak, energy)
 
-                # 方式1：能量 VAD 检测到静默（Mac 上 ~0.5s 即触发）
                 end_threshold = max(speech_peak * self.SPEECH_END_RATIO,
                                     noise_energy * 1.5)
+
                 if energy < end_threshold:
                     silence_chunks += 1
                     if silence_chunks >= max_silence:
+                        dur = len(buffer) * chunk_sec
+                        logger.info("[VAD] speech END (silence) dur=%.1fs peak=%.4f", dur, speech_peak)
                         self._recognize_segment(buffer)
                         buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
                         continue
                 else:
                     silence_chunks = 0
 
-                # 方式2：强制超时兜底（VAD 失灵时最多等 2.5s）
                 if len(buffer) >= forced_chunks:
+                    dur = len(buffer) * chunk_sec
+                    logger.info("[VAD] speech END (forced timeout) dur=%.1fs", dur)
                     self._recognize_segment(buffer)
                     buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
                     continue
 
-                # 方式3：绝对上限防护
                 if len(buffer) > max_speech_chunks:
+                    logger.info("[VAD] speech END (max duration)")
                     self._recognize_segment(buffer)
                     buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
 
@@ -324,16 +357,32 @@ class FunASREngine(ASREngineBase):
     def _recognize_segment(self, buffer: list[np.ndarray]):
         import torch
         audio = np.concatenate(buffer)
-        if len(audio) / self.sample_rate < self.MIN_SPEECH_DURATION:
+        duration = len(audio) / self.sample_rate
+
+        if duration < self.MIN_SPEECH_DURATION:
+            logger.debug("[ASR] skipped short segment: %.2fs", duration)
             return
+
+        # 确保音频数据格式正确（Windows 驱动兼容性）
+        audio = np.ascontiguousarray(audio, dtype=np.float32)
+        audio = np.clip(audio, -1.0, 1.0)
+
         try:
             with torch.no_grad():
                 res = self._model.generate(input=audio, batch_size_s=300)
-        except Exception:
+        except Exception as e:
+            logger.error("[ASR] generate() failed: %s", e)
+            if self._on_partial:
+                self._on_partial(f"[识别错误] {e}")
             return
+
         text = self._extract_text(res)
+        logger.info("[ASR] recognized (%.1fs): '%s'", duration, text)
+
         if text and self._on_final:
             self._on_final(text)
+        elif not text and self._on_partial:
+            self._on_partial(f"(无识别结果, {duration:.1f}s)")
 
     @staticmethod
     def _extract_text(res) -> str:

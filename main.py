@@ -4,6 +4,7 @@
 """
 
 import datetime
+import logging
 import os
 import platform
 import sys
@@ -15,6 +16,12 @@ from config import ASR_ENGINE, VOSK_MODEL_PATH, MODEL_DIR, DEFAULT_VOSK_MODEL, V
 from command_parser import CommandParser, Command
 from ppt_controller import PPTController, check_accessibility_permission
 from asr_engine import VoskEngine, FunASREngine, ASREngineBase
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 class PPTVoiceApp:
