@@ -146,8 +146,10 @@ class FunASREngine(ASREngineBase):
     SILENCE_DURATION = 0.45     # 说完后静默 450ms 视为语句结束
     MIN_SPEECH_DURATION = 0.2   # 过滤极短噪音
     MAX_SPEECH_DURATION = 8.0   # 防止无限录制
-    NOISE_SMOOTH = 0.92         # 噪声底估计的平滑系数
+    NOISE_SMOOTH = 0.92         # 噪声底估计的平滑系数（静默时）
+    NOISE_SMOOTH_SPEAKING = 0.98  # 说话期间也缓慢更新噪声底，防止卡住
     SPEECH_THRESHOLD_RATIO = 4.0
+    CALIBRATION_SECONDS = 0.5   # 启动后先采集环境噪音
 
     _FUNASR_MODEL_ID = (
         "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -244,7 +246,10 @@ class FunASREngine(ASREngineBase):
         chunk_sec = self.CAPTURE_CHUNK / self.sample_rate
         max_silence = int(self.SILENCE_DURATION / chunk_sec)
         max_speech_chunks = int(self.MAX_SPEECH_DURATION / chunk_sec)
-        noise_energy = 0.01
+        calibration_chunks = int(self.CALIBRATION_SECONDS / chunk_sec)
+
+        # 校准阶段：采集环境噪音建立基线
+        noise_energy = self._calibrate_noise(calibration_chunks)
 
         while self._running:
             try:
@@ -265,6 +270,9 @@ class FunASREngine(ASREngineBase):
                         self._on_partial("(listening...)")
                 silence_chunks = 0
                 buffer.append(chunk)
+                # 说话期间也缓慢更新噪声底，防止阈值卡在过低值
+                noise_energy = (self.NOISE_SMOOTH_SPEAKING * noise_energy
+                                + (1 - self.NOISE_SMOOTH_SPEAKING) * energy)
             elif is_speaking:
                 buffer.append(chunk)
                 silence_chunks += 1
@@ -277,6 +285,21 @@ class FunASREngine(ASREngineBase):
             if is_speaking and len(buffer) > max_speech_chunks:
                 self._recognize_segment(buffer)
                 buffer, is_speaking, silence_chunks = [], False, 0
+
+    def _calibrate_noise(self, num_chunks: int) -> float:
+        """启动时采集环境噪音，返回噪声能量基线。"""
+        energies = []
+        for _ in range(num_chunks):
+            if not self._running:
+                break
+            try:
+                chunk = self._audio_queue.get(timeout=1.0)
+                energies.append(float(np.sqrt(np.mean(chunk ** 2))))
+            except queue.Empty:
+                continue
+        if energies:
+            return sum(energies) / len(energies)
+        return 0.01
 
     def _recognize_segment(self, buffer: list[np.ndarray]):
         audio = np.concatenate(buffer)
