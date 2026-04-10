@@ -190,7 +190,6 @@ class FunASREngine(ASREngineBase):
             return False
         required = ("configuration.json", "config.yaml", "model.pt")
         return all(os.path.isfile(os.path.join(path, name)) for name in required)
-
     def _find_model(self) -> str:
         """按优先级查找模型路径: 打包内置 → ModelScope 缓存 → 模型ID(自动下载)。"""
         if getattr(sys, "frozen", False):
