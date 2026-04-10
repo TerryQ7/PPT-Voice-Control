@@ -7,5 +7,6 @@ __pycache__/
 build/
 dist/
 release/
+installer_staging/
 *.spec
 .DS_Store

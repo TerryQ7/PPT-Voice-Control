@@ -223,6 +223,7 @@ class FunASREngine(ASREngineBase):
     def _load_model(self):
         if self._model is not None:
             return
+        os.environ.setdefault("TQDM_DISABLE", "1")
         import torch
         torch.set_num_threads(2)
         torch.set_grad_enabled(False)

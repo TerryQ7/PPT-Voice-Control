@@ -12,6 +12,28 @@ import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
+class _NullStream:
+    """兼容无控制台窗口场景的标准输出/错误占位流。"""
+
+    def write(self, _data):
+        return 0
+
+    def flush(self):
+        return None
+
+    def isatty(self):
+        return False
+
+
+def _ensure_std_streams():
+    """在 windowed 打包下，避免第三方库向 None 的 stderr/stdout 写入。"""
+    for name in ("stdout", "stderr", "__stdout__", "__stderr__"):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, _NullStream())
+
+
+_ensure_std_streams()
+
 from config import ASR_ENGINE, VOSK_MODEL_PATH, MODEL_DIR, DEFAULT_VOSK_MODEL, VOSK_MODEL_URLS
 from command_parser import CommandParser, Command
 from ppt_controller import PPTController, check_accessibility_permission

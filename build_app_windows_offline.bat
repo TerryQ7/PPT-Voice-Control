@@ -8,7 +8,7 @@ REM - Target machines do NOT need Python installed
 
 cd /d "%~dp0"
 
-set "APP_NAME=PPT语音控制助手离线版"
+set "APP_NAME=PPT-Voice-Control-Offline"
 set "MODEL_DIR=%CD%\funasr_model"
 set "MODEL_CACHE=%USERPROFILE%\.cache\modelscope\hub\models\iic\speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 set "DIST_DIR=%CD%\dist\%APP_NAME%"
