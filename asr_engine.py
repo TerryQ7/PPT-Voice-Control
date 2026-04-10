@@ -143,13 +143,14 @@ class FunASREngine(ASREngineBase):
     """
 
     CAPTURE_CHUNK = 1600        # 100ms @ 16kHz
-    SILENCE_DURATION = 0.5      # 说完后静默 500ms 视为语句结束
-    MIN_SPEECH_DURATION = 0.2   # 过滤极短噪音
-    MAX_SPEECH_DURATION = 8.0   # 防止无限录制
-    NOISE_SMOOTH = 0.92         # 噪声底估计的平滑系数
-    SPEECH_START_RATIO = 4.0    # 启动语音检测：能量 > 噪声底 × 此值
-    SPEECH_END_RATIO = 0.25     # 结束语音检测：能量 < 说话峰值 × 此值
-    CALIBRATION_SECONDS = 0.5   # 启动后先采集环境噪音
+    SILENCE_DURATION = 0.5      # 说完后静默 500ms → 送识别
+    MIN_SPEECH_DURATION = 0.3   # 过滤极短噪音
+    FORCED_TIMEOUT = 2.5        # 兜底：说话后 2.5s 必定送识别（防 VAD 失灵）
+    MAX_SPEECH_DURATION = 6.0   # 绝对上限
+    NOISE_SMOOTH = 0.92
+    SPEECH_START_RATIO = 5.0    # 开始检测：能量 > 噪声底 × 5
+    SPEECH_END_RATIO = 0.20     # 结束检测：能量 < 说话峰值 × 20%
+    CALIBRATION_SECONDS = 0.6   # 启动后先采集环境噪音
 
     _FUNASR_MODEL_ID = (
         "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -249,6 +250,7 @@ class FunASREngine(ASREngineBase):
         speech_peak = 0.0
         chunk_sec = self.CAPTURE_CHUNK / self.sample_rate
         max_silence = int(self.SILENCE_DURATION / chunk_sec)
+        forced_chunks = int(self.FORCED_TIMEOUT / chunk_sec)
         max_speech_chunks = int(self.MAX_SPEECH_DURATION / chunk_sec)
         calibration_chunks = int(self.CALIBRATION_SECONDS / chunk_sec)
 
@@ -264,7 +266,7 @@ class FunASREngine(ASREngineBase):
                 continue
 
             energy = float(np.sqrt(np.mean(chunk ** 2)))
-            start_threshold = max(noise_energy * self.SPEECH_START_RATIO, 0.008)
+            start_threshold = max(noise_energy * self.SPEECH_START_RATIO, 0.01)
 
             if not is_speaking:
                 if energy > start_threshold:
@@ -280,6 +282,8 @@ class FunASREngine(ASREngineBase):
             else:
                 buffer.append(chunk)
                 speech_peak = max(speech_peak, energy)
+
+                # 方式1：能量 VAD 检测到静默（Mac 上 ~0.5s 即触发）
                 end_threshold = max(speech_peak * self.SPEECH_END_RATIO,
                                     noise_energy * 1.5)
                 if energy < end_threshold:
@@ -287,9 +291,17 @@ class FunASREngine(ASREngineBase):
                     if silence_chunks >= max_silence:
                         self._recognize_segment(buffer)
                         buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
+                        continue
                 else:
                     silence_chunks = 0
 
+                # 方式2：强制超时兜底（VAD 失灵时最多等 2.5s）
+                if len(buffer) >= forced_chunks:
+                    self._recognize_segment(buffer)
+                    buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
+                    continue
+
+                # 方式3：绝对上限防护
                 if len(buffer) > max_speech_chunks:
                     self._recognize_segment(buffer)
                     buffer, is_speaking, silence_chunks, speech_peak = [], False, 0, 0.0
