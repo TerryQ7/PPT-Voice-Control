@@ -6,6 +6,7 @@
 import datetime
 import os
 import platform
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
@@ -208,6 +209,7 @@ class PPTVoiceApp:
         if self.engine and self.engine.is_running():
             self.engine.stop()
         self.root.destroy()
+        os._exit(0)
 
     # ==================== 识别回调 ====================
 

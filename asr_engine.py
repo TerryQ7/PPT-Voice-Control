@@ -192,6 +192,9 @@ class FunASREngine(ASREngineBase):
     def _load_model(self):
         if self._model is not None:
             return
+        import torch
+        torch.set_num_threads(2)
+        torch.set_grad_enabled(False)
         from funasr import AutoModel
 
         model_path = self._find_model()
@@ -302,11 +305,13 @@ class FunASREngine(ASREngineBase):
         return 0.01
 
     def _recognize_segment(self, buffer: list[np.ndarray]):
+        import torch
         audio = np.concatenate(buffer)
         if len(audio) / self.sample_rate < self.MIN_SPEECH_DURATION:
             return
         try:
-            res = self._model.generate(input=audio, batch_size_s=300)
+            with torch.no_grad():
+                res = self._model.generate(input=audio, batch_size_s=300)
         except Exception:
             return
         text = self._extract_text(res)
