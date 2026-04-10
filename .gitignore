@@ -1,9 +1,11 @@
 venv/
 models/
+funasr_model/
 __pycache__/
 *.pyc
 *.pyo
 build/
 dist/
+release/
 *.spec
 .DS_Store
