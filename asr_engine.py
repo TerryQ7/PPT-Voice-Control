@@ -7,6 +7,7 @@
 
 import json
 import os
+import sys
 import queue
 import threading
 from abc import ABC, abstractmethod
@@ -151,9 +152,7 @@ class FunASREngine(ASREngineBase):
     _FUNASR_MODEL_ID = (
         "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
     )
-    _LOCAL_MODEL_DIR = os.path.expanduser(
-        f"~/.cache/modelscope/hub/models/{_FUNASR_MODEL_ID}"
-    )
+    _BUNDLED_MODEL_NAME = "funasr_model"
 
     def __init__(self, sample_rate: int = SAMPLE_RATE):
         self.sample_rate = sample_rate
@@ -165,17 +164,36 @@ class FunASREngine(ASREngineBase):
         self._on_final: Optional[Callable] = None
         self._model = None
 
+    def _find_model(self) -> str:
+        """按优先级查找模型路径: 打包内置 → ModelScope 缓存 → 模型ID(自动下载)。"""
+        # 1) PyInstaller 打包后内置的模型
+        if getattr(sys, "frozen", False):
+            bundled = os.path.join(sys._MEIPASS, self._BUNDLED_MODEL_NAME)
+            if os.path.isdir(bundled):
+                return bundled
+
+        # 2) 开发模式：项目目录下手动放置的模型
+        local = os.path.join(os.path.dirname(os.path.abspath(__file__)), self._BUNDLED_MODEL_NAME)
+        if os.path.isdir(local):
+            return local
+
+        # 3) ModelScope 缓存
+        cache = os.path.expanduser(
+            f"~/.cache/modelscope/hub/models/{self._FUNASR_MODEL_ID}"
+        )
+        if os.path.isdir(cache):
+            return cache
+
+        # 4) 回退到模型 ID，让 FunASR/ModelScope 自动下载
+        return self._FUNASR_MODEL_ID
+
     def _load_model(self):
         if self._model is not None:
             return
         from funasr import AutoModel
 
-        model_id = (
-            self._LOCAL_MODEL_DIR
-            if os.path.isdir(self._LOCAL_MODEL_DIR)
-            else self._FUNASR_MODEL_ID
-        )
-        self._model = AutoModel(model=model_id, device="cpu", disable_update=True)
+        model_path = self._find_model()
+        self._model = AutoModel(model=model_path, device="cpu", disable_update=True)
 
     def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None]):
         if self._running:

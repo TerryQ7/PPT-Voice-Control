@@ -22,6 +22,22 @@ jobs:
           pip install sounddevice numpy pynput pyinstaller
           pip install funasr torch torchaudio modelscope
 
+      - name: Download FunASR model
+        run: |
+          python -c "
+          from modelscope.hub.snapshot_download import snapshot_download
+          import shutil, os
+          print('Downloading Paraformer model...')
+          model_dir = snapshot_download('iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch')
+          print(f'Model downloaded to: {model_dir}')
+          dest = 'funasr_model'
+          if os.path.exists(dest):
+              shutil.rmtree(dest)
+          shutil.copytree(model_dir, dest)
+          print(f'Model copied to: {dest}')
+          print(f'Contents: {os.listdir(dest)}')
+          "
+
       - name: Build with PyInstaller
         run: |
           pyinstaller `
@@ -30,6 +46,7 @@ jobs:
             --onedir `
             --noconfirm `
             --clean `
+            --add-data "funasr_model;funasr_model" `
             --hidden-import sounddevice `
             --hidden-import numpy `
             --hidden-import funasr `
