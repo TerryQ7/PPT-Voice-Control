@@ -5,6 +5,15 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 
 **Default engine: [FunASR Paraformer](https://github.com/modelscope/FunASR)** — high-accuracy offline speech recognition from Alibaba, supporting Chinese–English bilingual input.
 
+## Features
+
+- **Fully offline** — after initial model download, no internet required
+- **Chinese & English** voice commands with Chinese numeral support (e.g. "第二十三页")
+- **Platform-adaptive VAD** — energy-based voice activity detection with auto-calibrated noise baseline, tuned separately for macOS and Windows
+- **Dual ASR engine** — FunASR Paraformer (high accuracy) or Vosk (lightweight)
+- **Cross-platform** — macOS (Quartz CGEvent) and Windows (pynput) keyboard simulation
+- **One-click packaging** — PyInstaller scripts for macOS & Windows, plus Inno Setup installer for offline Windows distribution
+
 ## Supported Commands
 
 | Voice Command | Action |
@@ -72,11 +81,14 @@ Microphone
     ↓
 Audio Capture (sounddevice, 100ms chunks)
     ↓
-Voice Activity Detection (energy-based VAD)
+Voice Activity Detection (energy-based, platform-adaptive)
+    ├── Auto noise calibration on startup (~0.6s)
+    ├── Relative-peak energy for end-of-speech detection
+    └── Forced 2.5s timeout as safety net
     ↓
 Speech Recognition (FunASR Paraformer / Vosk)
     ↓
-Command Parser (regex + keyword matching, Chinese numeral support)
+Command Parser (regex + keyword matching, Chinese numeral support, debounce)
     ↓
 PPT Controller
     ├── macOS: Quartz CGEvent (low-level hardware key events)
@@ -87,15 +99,19 @@ PPT Controller
 
 ```
 PPT_Project/
-├── main.py               # GUI application entry point (tkinter)
-├── asr_engine.py         # ASR engines: FunASREngine + VoskEngine
-├── command_parser.py     # Voice command parser (Chinese/English, debounce)
-├── ppt_controller.py     # Keyboard simulation (Quartz CGEvent / pynput)
-├── config.py             # Global configuration (engine, keywords, params)
-├── download_model.py     # Vosk model download utility
-├── requirements.txt      # Python dependencies
-├── build_app.sh          # macOS packaging script (PyInstaller)
-└── build_app_windows.bat # Windows packaging script (PyInstaller)
+├── main.py                        # GUI entry point (tkinter)
+├── asr_engine.py                  # ASR engines: FunASREngine + VoskEngine
+├── command_parser.py              # Voice command parser (Chinese/English, debounce)
+├── ppt_controller.py              # Keyboard simulation (Quartz CGEvent / pynput)
+├── config.py                      # Global configuration (engine, keywords, params)
+├── download_model.py              # Vosk model download utility
+├── requirements.txt               # Python dependencies
+├── build_app.sh                   # macOS packaging (PyInstaller)
+├── build_app_windows.bat          # Windows packaging (PyInstaller)
+├── build_app_windows_offline.bat  # Windows offline packaging (bundles model)
+├── build_installer_offline.iss    # Inno Setup installer script
+└── .github/workflows/
+    └── build-windows.yml          # GitHub Actions CI for Windows build
 ```
 
 ## Configuration
@@ -119,17 +135,40 @@ For a lighter setup (no PyTorch needed, ~42 MB model):
 
 ## Packaging
 
-Build a standalone executable for non-developer users:
+### macOS
 
 ```bash
-# macOS
 chmod +x build_app.sh && ./build_app.sh
+```
 
-# Windows
+Output: `dist/PPT语音控制助手/`
+
+### Windows (online)
+
+```bash
 build_app_windows.bat
 ```
 
 Output: `dist/PPT语音控制助手/`
+
+### Windows (offline, bundles model)
+
+Builds a standalone package that includes the FunASR model — target machines need no Python or internet.
+
+```bash
+build_app_windows_offline.bat
+```
+
+Output: `release/PPT-Voice-Control-Offline/` + `.zip`
+
+To create a Windows installer (requires [Inno Setup](https://jrsoftware.org/isinfo.php)):
+
+1. Copy the build output into `installer_staging/`
+2. Run `build_installer_offline.iss` with Inno Setup Compiler
+
+### GitHub Actions
+
+A CI workflow (`.github/workflows/build-windows.yml`) automatically builds the Windows executable on push to `main`. The artifact is uploaded and available for 30 days.
 
 ## License
 
