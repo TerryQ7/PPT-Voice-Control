@@ -19,7 +19,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-from config import SAMPLE_RATE, BLOCK_SIZE
+from config import SAMPLE_RATE, BLOCK_SIZE, NO_AUDIO_TIMEOUT, DEAD_DEVICE_ENERGY
 
 logger = logging.getLogger("asr_engine")
 IS_WINDOWS = platform.system() == "Windows"
@@ -29,7 +29,8 @@ class ASREngineBase(ABC):
     """语音识别引擎抽象基类。"""
 
     @abstractmethod
-    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None]):
+    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None],
+              on_no_audio_warning: Optional[Callable[[str], None]] = None):
         ...
 
     @abstractmethod
@@ -59,6 +60,8 @@ class VoskEngine(ASREngineBase):
         self._thread: Optional[threading.Thread] = None
         self._on_partial: Optional[Callable] = None
         self._on_final: Optional[Callable] = None
+        self._on_no_audio_warning: Optional[Callable] = None
+        self._no_audio_warned = False
         self._model = None
         self._recognizer = None
 
@@ -74,7 +77,8 @@ class VoskEngine(ASREngineBase):
             )
         self._model = vosk.Model(self.model_path)
 
-    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None]):
+    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None],
+              on_no_audio_warning: Optional[Callable[[str], None]] = None):
         if self._running:
             return
         self._load_model()
@@ -83,6 +87,8 @@ class VoskEngine(ASREngineBase):
         self._recognizer.SetWords(False)
         self._on_partial = on_partial
         self._on_final = on_final
+        self._on_no_audio_warning = on_no_audio_warning
+        self._no_audio_warned = False
         self._running = True
         self._flush_queue()
         self._stream = sd.RawInputStream(
@@ -120,6 +126,8 @@ class VoskEngine(ASREngineBase):
             self._audio_queue.put(bytes(indata))
 
     def _recognition_loop(self):
+        dead_audio_start: Optional[float] = None
+
         while self._running:
             try:
                 data = self._audio_queue.get(timeout=0.5)
@@ -127,6 +135,20 @@ class VoskEngine(ASREngineBase):
                 continue
             if self._recognizer is None:
                 break
+
+            if not self._no_audio_warned and self._on_no_audio_warning:
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+                energy = float(np.sqrt(np.mean(samples ** 2)))
+                if energy < DEAD_DEVICE_ENERGY:
+                    if dead_audio_start is None:
+                        dead_audio_start = time.monotonic()
+                    elif time.monotonic() - dead_audio_start >= NO_AUDIO_TIMEOUT:
+                        self._no_audio_warned = True
+                        device_name = self._get_current_device_name()
+                        self._on_no_audio_warning(device_name)
+                else:
+                    dead_audio_start = None
+
             if self._recognizer.AcceptWaveform(data):
                 result = json.loads(self._recognizer.Result())
                 text = result.get("text", "").strip()
@@ -137,6 +159,16 @@ class VoskEngine(ASREngineBase):
                 text = partial.get("partial", "").strip()
                 if text and self._on_partial:
                     self._on_partial(text)
+
+    def _get_current_device_name(self) -> str:
+        try:
+            if self.device_index is not None:
+                dev = sd.query_devices(self.device_index)
+                return dev["name"]
+            dev = sd.query_devices(kind="input")
+            return dev["name"]
+        except Exception:
+            return "未知设备"
 
 
 # =====================================================================
@@ -186,6 +218,8 @@ class FunASREngine(ASREngineBase):
         self._thread: Optional[threading.Thread] = None
         self._on_partial: Optional[Callable] = None
         self._on_final: Optional[Callable] = None
+        self._on_no_audio_warning: Optional[Callable] = None
+        self._no_audio_warned = False
         self._model = None
 
     @staticmethod
@@ -238,12 +272,15 @@ class FunASREngine(ASREngineBase):
         logger.info("Loading model from: %s", model_path)
         self._model = AutoModel(model=model_path, device="cpu", disable_update=True)
 
-    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None]):
+    def start(self, on_partial: Callable[[str], None], on_final: Callable[[str], None],
+              on_no_audio_warning: Optional[Callable[[str], None]] = None):
         if self._running:
             return
         self._load_model()
         self._on_partial = on_partial
         self._on_final = on_final
+        self._on_no_audio_warning = on_no_audio_warning
+        self._no_audio_warned = False
         self._running = True
 
         while not self._audio_queue.empty():
@@ -292,6 +329,7 @@ class FunASREngine(ASREngineBase):
         max_speech_chunks = int(self.MAX_SPEECH_DURATION / chunk_sec)
         calibration_chunks = int(self.CALIBRATION_SECONDS / chunk_sec)
         debug_counter = 0
+        dead_audio_start: Optional[float] = None
 
         noise_energy = self._calibrate_noise(calibration_chunks)
         logger.info("[VAD] calibrated noise=%.4f, platform=%s", noise_energy,
@@ -310,6 +348,19 @@ class FunASREngine(ASREngineBase):
                 continue
 
             energy = float(np.sqrt(np.mean(chunk ** 2)))
+
+            if not self._no_audio_warned and self._on_no_audio_warning:
+                if energy < DEAD_DEVICE_ENERGY:
+                    if dead_audio_start is None:
+                        dead_audio_start = time.monotonic()
+                    elif time.monotonic() - dead_audio_start >= NO_AUDIO_TIMEOUT:
+                        self._no_audio_warned = True
+                        device_name = self._get_current_device_name()
+                        logger.warning("[VAD] no audio detected for %.0fs on '%s'",
+                                       NO_AUDIO_TIMEOUT, device_name)
+                        self._on_no_audio_warning(device_name)
+                else:
+                    dead_audio_start = None
             start_threshold = min(
                 max(noise_energy * self.SPEECH_START_RATIO, 0.008),
                 self.START_THRESHOLD_CAP,
@@ -419,6 +470,16 @@ class FunASREngine(ASREngineBase):
             if text:
                 return text
         return ""
+
+    def _get_current_device_name(self) -> str:
+        try:
+            if self.device_index is not None:
+                dev = sd.query_devices(self.device_index)
+                return dev["name"]
+            dev = sd.query_devices(kind="input")
+            return dev["name"]
+        except Exception:
+            return "未知设备"
 
 
 def get_available_devices():

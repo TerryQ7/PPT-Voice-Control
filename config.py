@@ -26,6 +26,10 @@ VOSK_MODEL_PATH = os.path.join(MODEL_DIR, DEFAULT_VOSK_MODEL)
 SAMPLE_RATE = 16000
 BLOCK_SIZE = 4000  # Vosk 每次处理 0.25 秒音频
 
+# ==================== 无音频输入检测 ====================
+NO_AUDIO_TIMEOUT = 10.0          # 连续多少秒检测到"死寂"才触发警告
+DEAD_DEVICE_ENERGY = 0.0001      # float32 RMS 低于此值视为设备无有效输入
+
 # ==================== 命令去重 ====================
 DEBOUNCE_SECONDS = 2.0
 

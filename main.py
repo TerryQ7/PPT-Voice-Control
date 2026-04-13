@@ -273,7 +273,8 @@ class PPTVoiceApp:
                     engine = FunASREngine(device_index=device_idx)
                 else:
                     engine = VoskEngine(model_path=VOSK_MODEL_PATH, device_index=device_idx)
-                engine.start(on_partial=self._on_partial, on_final=self._on_final)
+                engine.start(on_partial=self._on_partial, on_final=self._on_final,
+                             on_no_audio_warning=self._on_no_audio_warning)
                 self.root.after(0, self._on_engine_started, engine)
             except Exception as e:
                 self.root.after(0, self._on_engine_failed, str(e))
@@ -311,7 +312,11 @@ class PPTVoiceApp:
         if self.engine and self.engine.is_running():
             self.engine.stop()
         self.root.destroy()
-        os._exit(0)
+        # 兜底：若第三方库的非 daemon 线程阻止进程退出，3 秒后强制终止。
+        # 该计时器本身是 daemon 线程——正常退出时会随主线程一起消亡，不会触发。
+        _force_exit = threading.Timer(3.0, os._exit, args=(0,))
+        _force_exit.daemon = True
+        _force_exit.start()
 
     # ==================== 识别回调 ====================
 
@@ -320,6 +325,37 @@ class PPTVoiceApp:
 
     def _on_final(self, text: str):
         self.root.after(0, self._handle_final, text)
+
+    def _on_no_audio_warning(self, current_device: str):
+        self.root.after(0, self._handle_no_audio_warning, current_device)
+
+    def _handle_no_audio_warning(self, current_device: str):
+        self._set_status("未检测到音频输入!", "#FF9800")
+        self._log(f"⚠ 连续多秒未检测到有效音频输入，当前设备: {current_device}")
+
+        other_devices = []
+        for idx, name in self._audio_devices:
+            if self._selected_device_idx is not None:
+                if idx != self._selected_device_idx:
+                    other_devices.append(name)
+            else:
+                other_devices.append(name)
+
+        device_list = "\n".join(f"  - {name}" for name in other_devices[:8])
+        if not device_list:
+            device_list = "  (无其他可用设备)"
+
+        messagebox.showwarning(
+            "未检测到音频输入",
+            f"已持续多秒未检测到有效音频信号，当前麦克风可能未正常工作。\n\n"
+            f"当前设备: {current_device}\n\n"
+            f"请检查:\n"
+            f"1. 麦克风是否已连接并开启\n"
+            f"2. 系统音频输入设置是否正确\n"
+            f"3. 是否选择了正确的音频输入设备\n\n"
+            f"其他可用设备:\n{device_list}\n\n"
+            f"可点击「停止」后在设备列表中切换，再重新开始监听。",
+        )
 
     def _handle_partial(self, text: str):
         self.partial_var.set(text)
