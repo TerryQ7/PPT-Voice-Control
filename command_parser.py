@@ -106,10 +106,41 @@ def chinese_to_int(cn_str: str) -> Optional[int]:
 
 # ==================== 跳转页码正则模式 ====================
 
-GOTO_PATTERNS_CN = [
-    re.compile(r"(?:回到|跳到|翻到|去|到|转到)?第\s*([一二三四五六七八九十百千两零〇壹贰叁肆伍陆柒捌玖拾佰仟\d]+)\s*[页张]"),
-    re.compile(r"(?:go\s*to|jump\s*to|slide|page)\s*(\d+)", re.IGNORECASE),
-]
+# 带显式跳转前缀的命令
+_GOTO_EXPLICIT_CN = re.compile(
+    r"(?:回到|跳到|翻到|去|到|转到)第\s*([一二三四五六七八九十百千两零〇壹贰叁肆伍陆柒捌玖拾佰仟\d]+)\s*[页张]"
+)
+# 无前缀的"第N页"
+_GOTO_BARE_CN = re.compile(
+    r"第\s*([一二三四五六七八九十百千两零〇壹贰叁肆伍陆柒捌玖拾佰仟\d]+)\s*[页张]"
+)
+# 英文：区分带跳转前缀和不带的
+_GOTO_EXPLICIT_EN = re.compile(
+    r"(?:go\s*to|jump\s*to)\s*(?:page|slide)?\s*(\d+)", re.IGNORECASE,
+)
+_GOTO_BARE_EN = re.compile(r"(?:slide|page)\s*(\d+)", re.IGNORECASE)
+
+# 命令匹配后的最大额外字符数（超出则视为描述性长句而非命令）
+_MAX_EXTRA_CHARS = 4
+
+# 第二道防线：描述性上下文正则（挡住长度检测放行的短描述句）
+_DESCRIPTIVE_CN = re.compile(
+    r"像.*第.+[页张]"
+    r"|如同.*第.+[页张]"
+    r"|就像.*第.+[页张]"
+    r"|正如.*第.+[页张]"
+    r"|第.+[页张].*(?:那样|一样|似的|所述|所示|描述|说的|说过|提到|展示)"
+    r"|在第.+[页张][中里上内]"
+    r"|和第.+[页张].*(?:一样|相同|类似)"
+    r"|跟第.+[页张].*(?:一样|相同|类似)"
+    r"|见第.+[页张]"
+    r"|参[考见照]第.+[页张]"
+)
+_DESCRIPTIVE_EN = re.compile(
+    r"(?:like|as|described|mentioned|shown|see|refer)\s.*(?:page|slide)\s*\d+"
+    r"|(?:page|slide)\s*\d+\s.*(?:described|mentioned|shown|said|stated)",
+    re.IGNORECASE,
+)
 
 
 class CommandParser:
@@ -138,35 +169,82 @@ class CommandParser:
     def _extract_command(self, text: str) -> Optional[Command]:
         # FunASR 中文输出带空格（"下 一 页"），去空格用于中文匹配
         text_compact = text.replace(" ", "")
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
+        text_normalized = " ".join(text_lower.split())
 
-        for pattern in GOTO_PATTERNS_CN:
-            match = pattern.search(text_compact)
-            if match:
-                num_str = match.group(1)
-                page = chinese_to_int(num_str)
+        is_desc_cn = bool(_DESCRIPTIVE_CN.search(text_compact))
+        is_desc_en = bool(_DESCRIPTIVE_EN.search(text_normalized))
+
+        # --- 跳转类命令 ---
+
+        # 1) 中文显式前缀（"跳到第三页"）：长度检测过滤长句
+        match = _GOTO_EXPLICIT_CN.search(text_compact)
+        if match and not is_desc_cn:
+            if len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                page = chinese_to_int(match.group(1))
                 if page is not None and page > 0:
-                    if page == 1:
-                        return Command(type=CommandType.FIRST)
-                    return Command(type=CommandType.GOTO, page=page)
+                    return self._page_cmd(page)
 
-        for kw in LAST_KEYWORDS:
-            if kw in text_compact or kw in text_lower:
-                return Command(type=CommandType.LAST)
+        # 2) 中文无前缀（"第三页"）：长度检测 + 描述性正则双重过滤
+        if not is_desc_cn:
+            match = _GOTO_BARE_CN.search(text_compact)
+            if match:
+                if len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = chinese_to_int(match.group(1))
+                    if page is not None and page > 0:
+                        return self._page_cmd(page)
 
-        for kw in FIRST_KEYWORDS:
-            if kw in text_compact or kw in text_lower:
-                return Command(type=CommandType.FIRST)
+        # 3) 英文显式前缀（"go to page 3" / "jump to 5"）
+        if not is_desc_en:
+            match = _GOTO_EXPLICIT_EN.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = int(match.group(1))
+                    if page > 0:
+                        return self._page_cmd(page)
 
-        for kw in NEXT_KEYWORDS:
-            if kw in text_compact or kw in text_lower:
-                return Command(type=CommandType.NEXT)
+        # 4) 英文无前缀（"page 3" / "slide 5"）
+        if not is_desc_en:
+            match = _GOTO_BARE_EN.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = int(match.group(1))
+                    if page > 0:
+                        return self._page_cmd(page)
 
-        for kw in PREV_KEYWORDS:
-            if kw in text_compact or kw in text_lower:
-                return Command(type=CommandType.PREV)
+        # --- 关键词类命令（同样短句才触发） ---
+        if is_desc_cn or is_desc_en:
+            return None
+
+        if self._match_keyword(text_compact, text_normalized, LAST_KEYWORDS):
+            return Command(type=CommandType.LAST)
+        if self._match_keyword(text_compact, text_normalized, FIRST_KEYWORDS):
+            return Command(type=CommandType.FIRST)
+        if self._match_keyword(text_compact, text_normalized, NEXT_KEYWORDS):
+            return Command(type=CommandType.NEXT)
+        if self._match_keyword(text_compact, text_normalized, PREV_KEYWORDS):
+            return Command(type=CommandType.PREV)
 
         return None
+
+    @staticmethod
+    def _page_cmd(page: int) -> Command:
+        if page == 1:
+            return Command(type=CommandType.FIRST)
+        return Command(type=CommandType.GOTO, page=page)
+
+    @staticmethod
+    def _match_keyword(text_compact: str, text_normalized: str,
+                       keywords: list[str]) -> bool:
+        """关键词匹配：命中后检查文本长度，短句才是命令。"""
+        for kw in keywords:
+            if kw in text_compact:
+                if len(text_compact) - len(kw) <= _MAX_EXTRA_CHARS:
+                    return True
+            if kw in text_normalized:
+                if len(text_normalized) - len(kw) <= _MAX_EXTRA_CHARS:
+                    return True
+        return False
 
     def _debounce(self, cmd: Command) -> Optional[Command]:
         now = time.time()

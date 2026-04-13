@@ -48,9 +48,11 @@ class ASREngineBase(ABC):
 class VoskEngine(ASREngineBase):
     """基于 Vosk 的离线流式语音识别引擎。"""
 
-    def __init__(self, model_path: str, sample_rate: int = SAMPLE_RATE):
+    def __init__(self, model_path: str, sample_rate: int = SAMPLE_RATE,
+                 device_index: Optional[int] = None):
         self.model_path = model_path
         self.sample_rate = sample_rate
+        self.device_index = device_index
         self._running = False
         self._audio_queue: queue.Queue = queue.Queue()
         self._stream: Optional[sd.RawInputStream] = None
@@ -86,6 +88,7 @@ class VoskEngine(ASREngineBase):
         self._stream = sd.RawInputStream(
             samplerate=self.sample_rate, blocksize=BLOCK_SIZE,
             dtype="int16", channels=1, callback=self._audio_callback,
+            device=self.device_index,
         )
         self._stream.start()
         self._thread = threading.Thread(target=self._recognition_loop, daemon=True)
@@ -173,8 +176,10 @@ class FunASREngine(ASREngineBase):
     )
     _BUNDLED_MODEL_NAME = "funasr_model"
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE):
+    def __init__(self, sample_rate: int = SAMPLE_RATE,
+                 device_index: Optional[int] = None):
         self.sample_rate = sample_rate
+        self.device_index = device_index
         self._running = False
         self._audio_queue: queue.Queue = queue.Queue()
         self._stream: Optional[sd.InputStream] = None
@@ -253,6 +258,7 @@ class FunASREngine(ASREngineBase):
             dtype="float32",
             channels=1,
             callback=self._audio_callback,
+            device=self.device_index,
         )
         self._stream.start()
         self._thread = threading.Thread(target=self._recognition_loop, daemon=True)
@@ -416,6 +422,26 @@ class FunASREngine(ASREngineBase):
 
 
 def get_available_devices():
-    """返回可用麦克风设备列表。"""
+    """返回可用音频输入设备列表（含 loopback 设备）。
+
+    在 Windows 上，WASAPI loopback 设备可捕获系统音频输出，
+    适用于远程会议等场景（监听 speaker 而非 mic）。
+    在 macOS 上，需安装虚拟音频设备（如 BlackHole）来实现同等功能。
+    """
     devices = sd.query_devices()
-    return [(i, d["name"]) for i, d in enumerate(devices) if d["max_input_channels"] > 0]
+    result = []
+    for i, d in enumerate(devices):
+        if d["max_input_channels"] > 0:
+            result.append((i, d["name"]))
+    if IS_WINDOWS:
+        try:
+            hostapis = sd.query_hostapis()
+            for api_idx, api in enumerate(hostapis):
+                if "wasapi" in api.get("name", "").lower():
+                    for dev_idx in api.get("devices", []):
+                        dev = devices[dev_idx]
+                        if dev["max_output_channels"] > 0 and dev["max_input_channels"] == 0:
+                            result.append((dev_idx, f"[Loopback] {dev['name']}"))
+        except Exception:
+            pass
+    return result

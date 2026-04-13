@@ -9,6 +9,9 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 
 - **Fully offline** — after initial model download, no internet required
 - **Chinese & English** voice commands with Chinese numeral support (e.g. "第二十三页")
+- **Microphone selection** — choose from available audio input devices in the UI; supports system default or a specific mic
+- **System audio capture (Loopback)** — for remote meeting scenarios, capture speaker output instead of mic input (Windows WASAPI Loopback; macOS requires virtual audio device such as BlackHole)
+- **Smart context filtering** — distinguishes commands from descriptive speech (e.g. "像第三页那样" will NOT trigger a jump, but "跳到第三页" will)
 - **Platform-adaptive VAD** — energy-based voice activity detection with auto-calibrated noise baseline, tuned separately for macOS and Windows
 - **Dual ASR engine** — FunASR Paraformer (high accuracy) or Vosk (lightweight)
 - **Cross-platform** — macOS (Quartz CGEvent) and Windows (pynput) keyboard simulation
@@ -18,13 +21,19 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 
 | Voice Command | Action |
 |---|---|
-| "下一页" / "next page" / "next slide" | Next slide |
-| "上一页" / "previous page" / "go back" | Previous slide |
+| "下一页" / "next page" / "next slide" / "forward" | Next slide |
+| "上一页" / "previous page" / "previous one" / "go back" | Previous slide |
 | "第N页" / "回到第N页" / "go to page N" | Jump to slide N |
-| "第一页" / "first page" | First slide |
-| "最后一页" / "last slide" | Last slide |
-
+| "第一页" / "first page" / "start over" | First slide |
+| "最后一页" / "last slide" / "go to end" | Last slide |
 > Chinese numerals are fully supported — e.g. "第二十三页" (page 23), "翻到第一百页" (page 100).
+>
+> **Context-aware filtering**: The system distinguishes commands from descriptive speech. Saying "像第三页描述的那样" or "as shown on page 3" will NOT trigger a page jump. Only explicit commands like "第三页", "跳到第三页", or "go to page 3" will navigate.
+
+### Important Notes
+
+- **PowerPoint must be the foreground window** — the application sends keyboard events to the active window. If PPT is not in focus, commands will not reach it.
+- **Remote meetings**: When presenting remotely (Zoom/Teams/etc.), the remote audience's voice comes through speakers, not the mic. Select a **Loopback** audio device to capture system audio output. On Windows, WASAPI loopback devices appear automatically. On macOS, install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole).
 
 ## Requirements
 
@@ -77,9 +86,11 @@ Two permissions are required:
 ## Architecture
 
 ```
-Microphone
+Audio Source (user-selectable)
+    ├── Microphone (local presentation)
+    └── System Audio / Loopback (remote meeting)
     ↓
-Audio Capture (sounddevice, 100ms chunks)
+Audio Capture (sounddevice, 100ms chunks, configurable device)
     ↓
 Voice Activity Detection (energy-based, platform-adaptive)
     ├── Auto noise calibration on startup (~0.6s)
@@ -88,7 +99,11 @@ Voice Activity Detection (energy-based, platform-adaptive)
     ↓
 Speech Recognition (FunASR Paraformer / Vosk)
     ↓
-Command Parser (regex + keyword matching, Chinese numeral support, debounce)
+Command Parser
+    ├── Keyword matching (Chinese + English, expanded vocabulary)
+    ├── Regex-based page jump ("第N页" / "go to page N")
+    ├── Descriptive context filter (suppresses "像第三页那样" etc.)
+    └── Debounce (2s dedup)
     ↓
 PPT Controller
     ├── macOS: Quartz CGEvent (low-level hardware key events)

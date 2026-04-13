@@ -31,21 +31,34 @@ DEBOUNCE_SECONDS = 2.0
 
 # ==================== 中英文命令关键词 ====================
 NEXT_KEYWORDS = [
+    # 中文
     "下一页", "下页", "下一张", "下一个", "翻到下一页", "往后翻",
-    "next page", "next slide", "next one",
+    # 英文（覆盖常见识别变体）
+    "next page", "next slide", "next one", "next please",
+    "move forward", "go forward", "forward",
 ]
 
 PREV_KEYWORDS = [
+    # 中文
     "上一页", "上页", "上一张", "上一个", "翻到上一页", "往前翻", "前一页",
-    "previous page", "previous slide", "last page", "go back",
+    # 英文（覆盖常见识别变体）
+    "previous page", "previous slide", "previous one",
+    "last page", "go back", "go backward", "move back",
+    "back one", "one back", "before",
 ]
 
 FIRST_KEYWORDS = [
+    # 中文
     "第一页", "第一张", "回到开头", "回到第一页", "从头开始",
-    "first page", "first slide",
+    # 英文
+    "first page", "first slide", "go to beginning", "start over",
+    "back to start", "beginning",
 ]
 
 LAST_KEYWORDS = [
+    # 中文
     "最后一页", "最后一张", "跳到最后",
+    # 英文
     "last slide", "final page", "final slide",
+    "go to end", "go to last", "the end",
 ]

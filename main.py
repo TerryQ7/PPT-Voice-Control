@@ -11,6 +11,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
+from typing import Optional
 
 class _NullStream:
     """兼容无控制台窗口场景的标准输出/错误占位流。"""
@@ -34,10 +35,12 @@ def _ensure_std_streams():
 
 _ensure_std_streams()
 
+import sounddevice as sd
+
 from config import ASR_ENGINE, VOSK_MODEL_PATH, MODEL_DIR, DEFAULT_VOSK_MODEL, VOSK_MODEL_URLS
 from command_parser import CommandParser, Command
 from ppt_controller import PPTController, check_accessibility_permission
-from asr_engine import VoskEngine, FunASREngine, ASREngineBase
+from asr_engine import VoskEngine, FunASREngine, ASREngineBase, get_available_devices
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -52,14 +55,18 @@ class PPTVoiceApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("PPT 语音控制助手")
-        self.root.geometry("580x520")
+        self.root.geometry("620x650")
         self.root.resizable(False, False)
 
         self.parser = CommandParser()
         self.controller = PPTController()
         self.engine: ASREngineBase | None = None
 
+        self._audio_devices: list[tuple[int, str]] = []
+        self._selected_device_idx: Optional[int] = None
+
         self._build_ui()
+        self._refresh_devices()
         self._check_accessibility()
         self._check_model()
 
@@ -75,6 +82,8 @@ class PPTVoiceApp:
         style.configure("Start.TButton", font=("Helvetica", 13), padding=10)
         style.configure("Stop.TButton", font=("Helvetica", 13), padding=10)
         style.configure("Info.TLabel", font=("Helvetica", 11), background="#f0f0f0", foreground="#666")
+        style.configure("Warn.TLabel", font=("Helvetica", 10), background="#fff3cd", foreground="#856404")
+        style.configure("Refresh.TButton", font=("Helvetica", 10), padding=2)
 
         main_frame = ttk.Frame(self.root, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -82,12 +91,42 @@ class PPTVoiceApp:
         ttk.Label(main_frame, text="PPT 语音控制助手", style="Title.TLabel").pack(pady=(0, 5))
         ttk.Label(
             main_frame,
-            text='说出 "下一页 / 上一页 / 第N页" 等指令即可自动控制PPT',
+            text='说出 "下一页 / next slide / 第N页" 等指令即可自动控制PPT（支持中英文）',
             style="Info.TLabel",
-        ).pack(pady=(0, 15))
+        ).pack(pady=(0, 10))
 
+        # 提示：PPT 必须前台 + 远程说明
+        tip_frame = tk.Frame(main_frame, bg="#fff3cd", relief="groove", bd=1, padx=8, pady=6)
+        tip_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(
+            tip_frame, text=(
+                "提示：① PPT 放映窗口必须置于最前台（焦点窗口），否则按键无法送达\n"
+                "　　　② 远程会议时请选择「系统音频(Loopback)」作为音频源"
+            ),
+            font=("Helvetica", 10), bg="#fff3cd", fg="#856404", justify=tk.LEFT, anchor="w",
+        ).pack(fill=tk.X)
+
+        # 音频设备选择
+        device_frame = ttk.LabelFrame(main_frame, text="音频输入设置", padding=8)
+        device_frame.pack(fill=tk.X, pady=(0, 10))
+
+        mic_row = ttk.Frame(device_frame)
+        mic_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(mic_row, text="音频设备:", font=("Helvetica", 11)).pack(side=tk.LEFT, padx=(0, 8))
+        self.device_var = tk.StringVar()
+        self.device_combo = ttk.Combobox(
+            mic_row, textvariable=self.device_var, state="readonly",
+            font=("Helvetica", 10), width=42,
+        )
+        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_selected)
+        ttk.Button(
+            mic_row, text="刷新", style="Refresh.TButton", command=self._refresh_devices,
+        ).pack(side=tk.LEFT)
+
+        # 状态行
         status_frame = ttk.Frame(main_frame)
-        status_frame.pack(fill=tk.X, pady=(0, 10))
+        status_frame.pack(fill=tk.X, pady=(0, 8))
         self.status_canvas = tk.Canvas(
             status_frame, width=16, height=16, bg="#f0f0f0", highlightthickness=0
         )
@@ -100,15 +139,15 @@ class PPTVoiceApp:
         self.partial_var = tk.StringVar(value="...")
         self.partial_label = ttk.Label(
             main_frame, textvariable=self.partial_var, font=("Helvetica", 12), foreground="#aaa",
-            background="#fff", relief="sunken", padding=6, wraplength=520
+            background="#fff", relief="sunken", padding=6, wraplength=560
         )
-        self.partial_label.pack(fill=tk.X, pady=(0, 10))
+        self.partial_label.pack(fill=tk.X, pady=(0, 8))
 
         ttk.Label(main_frame, text="命令执行记录:", style="Info.TLabel").pack(anchor=tk.W, pady=(0, 2))
         self.log_text = scrolledtext.ScrolledText(
-            main_frame, height=10, font=("Courier", 11), state=tk.DISABLED, wrap=tk.WORD
+            main_frame, height=8, font=("Courier", 11), state=tk.DISABLED, wrap=tk.WORD
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        self.log_text.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X)
@@ -122,6 +161,34 @@ class PPTVoiceApp:
         self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ==================== 音频设备管理 ====================
+
+    def _refresh_devices(self):
+        """刷新可用音频输入设备列表。"""
+        self._audio_devices = get_available_devices()
+        display_names = [f"[{idx}] {name}" for idx, name in self._audio_devices]
+
+        default_label = "(系统默认)"
+        try:
+            default_dev = sd.query_devices(kind="input")
+            if default_dev:
+                default_label = f"(系统默认: {default_dev['name']})"
+        except Exception:
+            pass
+
+        choices = [default_label] + display_names
+        self.device_combo["values"] = choices
+        if not self.device_var.get() or self.device_var.get() not in choices:
+            self.device_combo.current(0)
+            self._selected_device_idx = None
+
+    def _on_device_selected(self, _event=None):
+        sel = self.device_combo.current()
+        if sel <= 0:
+            self._selected_device_idx = None
+        else:
+            self._selected_device_idx = self._audio_devices[sel - 1][0]
 
     # ==================== 权限检查 ====================
 
@@ -197,13 +264,15 @@ class PPTVoiceApp:
         self._log("正在加载语音识别模型，请稍候...")
         self.root.update()
 
+        device_idx = self._selected_device_idx
+
         def _do_start():
             try:
                 engine: ASREngineBase
                 if ASR_ENGINE == "funasr":
-                    engine = FunASREngine()
+                    engine = FunASREngine(device_index=device_idx)
                 else:
-                    engine = VoskEngine(model_path=VOSK_MODEL_PATH)
+                    engine = VoskEngine(model_path=VOSK_MODEL_PATH, device_index=device_idx)
                 engine.start(on_partial=self._on_partial, on_final=self._on_final)
                 self.root.after(0, self._on_engine_started, engine)
             except Exception as e:
@@ -215,9 +284,12 @@ class PPTVoiceApp:
         self.engine = engine
         self.parser.reset()
         name = "FunASR" if ASR_ENGINE == "funasr" else "Vosk"
+        device_name = self.device_var.get()
         self._set_status(f"正在监听... ({name})", "#4CAF50")
         self._log(f"--- 开始监听 ({name}) ---")
+        self._log(f"音频设备: {device_name}")
         self.stop_btn.config(state=tk.NORMAL)
+        self.device_combo.config(state=tk.DISABLED)
 
     def _on_engine_failed(self, error: str):
         self._set_status("启动失败", "#F44336")
@@ -232,6 +304,7 @@ class PPTVoiceApp:
         self._log("--- 停止监听 ---")
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
+        self.device_combo.config(state="readonly")
         self.partial_var.set("...")
 
     def _on_close(self):
