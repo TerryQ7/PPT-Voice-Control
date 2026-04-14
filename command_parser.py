@@ -104,6 +104,72 @@ def chinese_to_int(cn_str: str) -> Optional[int]:
     return result if result > 0 else None
 
 
+def english_words_to_int(number_text: str) -> Optional[int]:
+    """将英文数字/序数短语转换成整数。"""
+    if not number_text:
+        return None
+
+    text = number_text.lower().strip().replace("-", " ")
+    if not text:
+        return None
+
+    if text.isdigit():
+        return int(text)
+
+    tokens = [tok for tok in text.split() if tok]
+    if not tokens:
+        return None
+
+    total = 0
+    current = 0
+
+    for tok in tokens:
+        if tok in _EN_NUMBER_CONNECTORS:
+            continue
+        if tok in ("a", "an"):
+            if current == 0:
+                current = 1
+            continue
+        if tok in _EN_NUMBER_SMALL:
+            current += _EN_NUMBER_SMALL[tok]
+            continue
+        if tok in _EN_ORDINAL_SMALL:
+            current += _EN_ORDINAL_SMALL[tok]
+            continue
+        if tok in _EN_NUMBER_TENS:
+            current += _EN_NUMBER_TENS[tok]
+            continue
+        if tok in _EN_ORDINAL_TENS:
+            current += _EN_ORDINAL_TENS[tok]
+            continue
+        if tok == "hundred":
+            if current == 0:
+                current = 1
+            current *= 100
+            continue
+        if tok == "thousand":
+            if current == 0:
+                current = 1
+            total += current * 1000
+            current = 0
+            continue
+        if tok == "hundredth":
+            if current == 0:
+                current = 1
+            current *= 100
+            continue
+        if tok == "thousandth":
+            if current == 0:
+                current = 1
+            total += current * 1000
+            current = 0
+            continue
+        return None
+
+    value = total + current
+    return value if value > 0 else None
+
+
 # ==================== 跳转页码正则模式 ====================
 
 # 带显式跳转前缀的命令
@@ -119,6 +185,97 @@ _GOTO_EXPLICIT_EN = re.compile(
     r"(?:go\s*to|jump\s*to)\s*(?:page|slide)?\s*(\d+)", re.IGNORECASE,
 )
 _GOTO_BARE_EN = re.compile(r"(?:slide|page)\s*(\d+)", re.IGNORECASE)
+_GOTO_EXPLICIT_EN_SUFFIX = re.compile(
+    r"(?:go\s*to|jump\s*to)\s*(\d+)\s*(?:page|slide)", re.IGNORECASE,
+)
+
+_EN_NUMBER_SMALL = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+}
+_EN_NUMBER_TENS = {
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+_EN_ORDINAL_SMALL = {
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5,
+    "sixth": 6,
+    "seventh": 7,
+    "eighth": 8,
+    "ninth": 9,
+    "tenth": 10,
+    "eleventh": 11,
+    "twelfth": 12,
+    "thirteenth": 13,
+    "fourteenth": 14,
+    "fifteenth": 15,
+    "sixteenth": 16,
+    "seventeenth": 17,
+    "eighteenth": 18,
+    "nineteenth": 19,
+}
+_EN_ORDINAL_TENS = {
+    "twentieth": 20,
+    "thirtieth": 30,
+    "fortieth": 40,
+    "fiftieth": 50,
+    "sixtieth": 60,
+    "seventieth": 70,
+    "eightieth": 80,
+    "ninetieth": 90,
+}
+_EN_NUMBER_CONNECTORS = {"and"}
+_EN_NUMBER_WORDS = (
+    set(_EN_NUMBER_SMALL)
+    | set(_EN_NUMBER_TENS)
+    | set(_EN_ORDINAL_SMALL)
+    | set(_EN_ORDINAL_TENS)
+    | {"hundred", "thousand", "hundredth", "thousandth", "a", "an", "and"}
+)
+_EN_NUMBER_WORD_RE = "(?:" + "|".join(
+    sorted((re.escape(w) for w in _EN_NUMBER_WORDS), key=len, reverse=True)
+) + ")"
+_EN_NUMBER_PHRASE_RE = rf"{_EN_NUMBER_WORD_RE}(?:[\s-]+{_EN_NUMBER_WORD_RE})*"
+_GOTO_EXPLICIT_EN_WORDS = re.compile(
+    rf"(?:go\s*to|jump\s*to)\s*(?:page|slide)?\s*({_EN_NUMBER_PHRASE_RE})\s*(?:page|slide)?",
+    re.IGNORECASE,
+)
+_GOTO_BARE_EN_WORDS_PREFIX = re.compile(
+    rf"(?:slide|page)\s*({_EN_NUMBER_PHRASE_RE})",
+    re.IGNORECASE,
+)
+_GOTO_BARE_EN_WORDS_SUFFIX = re.compile(
+    rf"({_EN_NUMBER_PHRASE_RE})\s*(?:slide|page)",
+    re.IGNORECASE,
+)
 
 # 命令匹配后的最大额外字符数（超出则视为描述性长句而非命令）
 _MAX_EXTRA_CHARS = 4
@@ -202,6 +359,18 @@ class CommandParser:
                     page = int(match.group(1))
                     if page > 0:
                         return self._page_cmd(page)
+            match = _GOTO_EXPLICIT_EN_SUFFIX.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = int(match.group(1))
+                    if page > 0:
+                        return self._page_cmd(page)
+            match = _GOTO_EXPLICIT_EN_WORDS.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = english_words_to_int(match.group(1))
+                    if page is not None and page > 0:
+                        return self._page_cmd(page)
 
         # 4) 英文无前缀（"page 3" / "slide 5"）
         if not is_desc_en:
@@ -210,6 +379,18 @@ class CommandParser:
                 if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
                     page = int(match.group(1))
                     if page > 0:
+                        return self._page_cmd(page)
+            match = _GOTO_BARE_EN_WORDS_PREFIX.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = english_words_to_int(match.group(1))
+                    if page is not None and page > 0:
+                        return self._page_cmd(page)
+            match = _GOTO_BARE_EN_WORDS_SUFFIX.search(text_normalized)
+            if match:
+                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+                    page = english_words_to_int(match.group(1))
+                    if page is not None and page > 0:
                         return self._page_cmd(page)
 
         # --- 关键词类命令（同样短句才触发） ---

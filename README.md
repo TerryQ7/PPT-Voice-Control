@@ -23,10 +23,12 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 |---|---|
 | "下一页" / "next page" / "next slide" / "forward" | Next slide |
 | "上一页" / "previous page" / "previous one" / "go back" | Previous slide |
-| "第N页" / "回到第N页" / "go to page N" | Jump to slide N |
+| "第N页" / "回到第N页" / "go to page N" / "first page" / "second page" / "third page" / "twenty-third page" / "one hundred and first page" | Jump to slide N |
 | "第一页" / "first page" / "start over" | First slide |
 | "最后一页" / "last slide" / "go to end" | Last slide |
 > Chinese numerals are fully supported — e.g. "第二十三页" (page 23), "翻到第一百页" (page 100).
+>
+> English ordinal/cardinal page phrases are also supported — e.g. "first page", "twenty third page", "go to one hundred and first page", "page fifty", "slide ninety ninth".
 >
 > **Context-aware filtering**: The system distinguishes commands from descriptive speech. Saying "像第三页描述的那样" or "as shown on page 3" will NOT trigger a page jump. Only explicit commands like "第三页", "跳到第三页", or "go to page 3" will navigate.
 
