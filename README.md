@@ -11,12 +11,14 @@ Both a **Simplified Chinese** and an **English** edition are shipped. The two sh
 
 Pre-built Windows installers for both languages are produced by GitHub Actions and attached to each tagged release. See the [Releases page](../../releases).
 
-| Edition | Installer (Windows, offline, model included) |
-|---|---|
-| Simplified Chinese (zh-CN) | `PPT语音控制助手-安装程序-v<version>.exe` |
-| English (en-US) | `PPT-Voice-Control-Setup-v<version>.exe` |
+| Edition | Release asset (Windows, offline, model included) | Local build output |
+|---|---|---|
+| Simplified Chinese (zh-CN) | `PPT-Voice-Control-zh-CN-Setup-v<version>.exe` | `PPT语音控制助手-安装程序-v<version>.exe` |
+| English (en-US) | `PPT-Voice-Control-en-US-Setup-v<version>.exe` | `PPT-Voice-Control-Setup-v<version>.exe` |
 
-Each installer is a self-contained bundle — the target machine needs neither Python nor an internet connection. The setup wizard is itself bilingual (Chinese installer ships a 简体中文 wizard, English installer ships an English wizard) and creates Start-menu and optional desktop shortcuts. Both editions use distinct App IDs and install paths so they can coexist on the same machine.
+Each installer is a self-contained bundle — the target machine needs neither Python nor an internet connection. The setup wizard is itself bilingual (Chinese installer ships a 简体中文 wizard, English installer ships an English wizard) and creates Start-menu and optional desktop shortcuts. Both editions use distinct App IDs and install paths, so they can coexist on the same machine. Once installed, the Chinese edition's window title, install directory, and shortcut all read `PPT语音控制助手`.
+
+> ℹ️ GitHub Releases sanitises non-ASCII characters in asset URLs, so the Chinese installer is uploaded with an ASCII-safe `zh-CN` marker. When you build locally with `installer.iss`, the file keeps its native Chinese name.
 
 ## Features
 

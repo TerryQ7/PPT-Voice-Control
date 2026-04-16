@@ -130,16 +130,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
           Get-ChildItem release\*.exe | Format-List Name, Length
 
+      - name: Prepare release-friendly filename
+        id: pkg
+        shell: pwsh
+        run: |
+          # Inno Setup emits the proper localized filename for local use
+          # (e.g. PPT语音控制助手-安装程序-v1.0.0.exe). However, GitHub Releases
+          # sanitises non-ASCII characters in asset URLs to "." which makes
+          # the Chinese asset undownloadable as-is. We therefore rename the
+          # zh artifact to an ASCII-safe name with a clear "zh-CN" marker;
+          # the installer's *internal* product name (window title, install
+          # path, Start-menu entry, app shortcut) remains 中文.
+          $version = '${{ steps.ver.outputs.version }}'
+          $built = Get-ChildItem release\*.exe | Select-Object -First 1
+          if ('${{ matrix.lang }}' -eq 'zh') {
+            $uploadName = "PPT-Voice-Control-zh-CN-Setup-v$version.exe"
+          } else {
+            $uploadName = "PPT-Voice-Control-en-US-Setup-v$version.exe"
+          }
+          $uploadPath = Join-Path "release" $uploadName
+          if ($built.Name -ne $uploadName) {
+            Move-Item $built.FullName $uploadPath -Force
+          }
+          Write-Host "Upload asset: $uploadName"
+          "upload_name=$uploadName" >> $env:GITHUB_OUTPUT
+          "upload_path=$uploadPath" >> $env:GITHUB_OUTPUT
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: release/*.exe
+          path: ${{ steps.pkg.outputs.upload_path }}
           retention-days: 30
 
       - name: Attach installer to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: ${{ steps.pkg.outputs.upload_path }}
           generate_release_notes: true
