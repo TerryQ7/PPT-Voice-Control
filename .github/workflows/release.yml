@@ -1,10 +1,15 @@
-name: Release (Windows bilingual build)
+name: Release (Windows installers)
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label embedded in the installer (e.g. 1.0.0)"
+        required: false
+        default: "0.0.0-dev"
 
 permissions:
   contents: write
@@ -19,13 +24,27 @@ jobs:
           - lang: zh
             entry: main.py
             app_name: PPT语音控制助手
-            asset_base: PPT-Voice-Control-zh-CN-Windows
+            artifact: PPT语音控制助手-Installer
           - lang: en
             entry: main_en.py
             app_name: PPT-Voice-Control
-            asset_base: PPT-Voice-Control-en-US-Windows
+            artifact: PPT-Voice-Control-Installer
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = '${{ github.ref_name }}'
+          if ($ref -match '^v') {
+            $version = $ref -replace '^v',''
+          } else {
+            $version = '${{ github.event.inputs.version }}'
+            if (-not $version) { $version = '0.0.0-dev' }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Resolved version: $version"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -73,26 +92,42 @@ jobs:
             --collect-all funasr `
             ${{ matrix.entry }}
 
-      - name: Package zip
+      - name: Stage installer files
         shell: pwsh
         run: |
-          $src = "dist/${{ matrix.app_name }}"
-          $zip = "release/${{ matrix.asset_base }}.zip"
-          New-Item -ItemType Directory -Force -Path "release" | Out-Null
-          if (Test-Path $zip) { Remove-Item $zip }
-          Compress-Archive -Path "$src/*" -DestinationPath $zip -CompressionLevel Optimal
-          Get-Item $zip | Format-List
+          if (Test-Path installer_staging) { Remove-Item installer_staging -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path installer_staging | Out-Null
+          Copy-Item -Path "dist/${{ matrix.app_name }}/*" -Destination installer_staging -Recurse
+          Get-ChildItem installer_staging | Select-Object -First 10 | Format-Table
 
-      - name: Upload release zip
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found at $iscc"
+          }
+          & $iscc `
+            "/DAppLang=${{ matrix.lang }}" `
+            "/DMyAppVersion=${{ steps.ver.outputs.version }}" `
+            installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Get-ChildItem release\*.exe | Format-List Name, Length
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_base }}
-          path: release/${{ matrix.asset_base }}.zip
+          name: ${{ matrix.artifact }}
+          path: release/*.exe
           retention-days: 30
 
-      - name: Attach to GitHub Release
+      - name: Attach installer to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/${{ matrix.asset_base }}.zip
+          files: release/*.exe
           generate_release_notes: true

@@ -9,14 +9,14 @@ Both a **Simplified Chinese** and an **English** edition are shipped. The two sh
 
 ## Downloads
 
-Pre-built Windows binaries for both languages are produced by GitHub Actions and attached to each tagged release. See the [Releases page](../../releases).
+Pre-built Windows installers for both languages are produced by GitHub Actions and attached to each tagged release. See the [Releases page](../../releases).
 
-| Edition | Asset (Windows, offline, model included) |
+| Edition | Installer (Windows, offline, model included) |
 |---|---|
-| English (en-US) | `PPT-Voice-Control-en-US-Windows.zip` |
-| Simplified Chinese (zh-CN) | `PPT-Voice-Control-zh-CN-Windows.zip` |
+| Simplified Chinese (zh-CN) | `PPT语音控制助手-安装程序-v<version>.exe` |
+| English (en-US) | `PPT-Voice-Control-Setup-v<version>.exe` |
 
-Each zip is a self-contained bundle — the target machine needs neither Python nor an internet connection.
+Each installer is a self-contained bundle — the target machine needs neither Python nor an internet connection. The setup wizard is itself bilingual (Chinese installer ships a 简体中文 wizard, English installer ships an English wizard) and creates Start-menu and optional desktop shortcuts. Both editions use distinct App IDs and install paths so they can coexist on the same machine.
 
 ## Features
 
@@ -165,10 +165,10 @@ PPT_Project/
 ├── build_app_windows.bat           # Windows packaging — Chinese edition
 ├── build_app_windows_en.bat        # Windows packaging — English edition
 ├── build_app_windows_offline.bat   # Windows offline packaging (bundles model)
-├── build_installer_offline.iss     # Inno Setup installer script
+├── installer.iss                   # Bilingual Inno Setup template (zh / en)
 └── .github/workflows/
     ├── build-windows.yml           # CI — builds both zh and en Windows artefacts
-    └── release.yml                 # Release — on v* tag, uploads zh & en zips
+    └── release.yml                 # Release — on v* tag, builds both installers and uploads them
 ```
 
 ## Configuration
@@ -234,15 +234,36 @@ build_app_windows_offline.bat
 
 Output: `release/PPT-Voice-Control-Offline/` + `.zip`
 
-To create a Windows installer (requires [Inno Setup](https://jrsoftware.org/isinfo.php)):
+### Building installers locally
 
-1. Copy the build output into `installer_staging/`
-2. Run `build_installer_offline.iss` with Inno Setup Compiler
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) on Windows.
+
+```bat
+:: 1. Build the PyInstaller bundle for the language you want.
+build_app_windows.bat            :: Chinese
+:: or
+build_app_windows_en.bat         :: English
+
+:: 2. Stage the build output where the installer expects it.
+xcopy /E /I /Y "dist\PPT语音控制助手"      installer_staging
+:: or for English:
+:: xcopy /E /I /Y "dist\PPT-Voice-Control" installer_staging
+
+:: 3. Compile the bilingual installer template.
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=zh /DMyAppVersion=1.0.0 installer.iss
+:: or:
+:: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=en /DMyAppVersion=1.0.0 installer.iss
+```
+
+Outputs land in `release/`:
+
+- `PPT语音控制助手-安装程序-v1.0.0.exe`
+- `PPT-Voice-Control-Setup-v1.0.0.exe`
 
 ### GitHub Actions
 
 - `.github/workflows/build-windows.yml` — builds **both** the `zh` and `en` Windows packages on every push to `main` (matrix build). Artifacts are retained for 30 days.
-- `.github/workflows/release.yml` — on any `v*` tag push (e.g. `git tag v1.2.0 && git push --tags`), builds both editions, zips them as `PPT-Voice-Control-zh-CN-Windows.zip` / `PPT-Voice-Control-en-US-Windows.zip`, and attaches them to the matching GitHub Release.
+- `.github/workflows/release.yml` — on any `v*` tag push (e.g. `git tag v1.0.0 && git push --tags`), builds both editions, runs Inno Setup to produce installers (`PPT语音控制助手-安装程序-v1.0.0.exe` / `PPT-Voice-Control-Setup-v1.0.0.exe`), and attaches them to the matching GitHub Release.
 
 ## License
 
