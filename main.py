@@ -108,25 +108,33 @@ class Theme:
 class FlatButton(tk.Frame):
     """A flat, Tesla-style CTA button for Tk.
 
-    Tk doesn't support rounded corners on widgets directly. We approximate the
-    4px radius by drawing the rectangle on a Canvas and letting hover/active
-    states change the fill color — exactly Tesla's colour-only interaction
-    pattern from DESIGN.md.
+    Tk doesn't support rounded corners on widgets directly, so we draw the
+    rectangle (and any optional icon glyph) on a Canvas and let hover/active
+    states change the fill colour — Tesla's colour-only interaction pattern
+    from ``DESIGN.md``. Three visual variants are supported:
+
+    - ``primary``: solid Electric Blue rectangle, white label.
+    - ``secondary``: white rectangle with a subtle Pale Silver border.
+    - ``ghost``: borderless icon button that only paints a background on
+      hover. Used for the refresh control next to the device picker.
     """
 
     def __init__(
         self,
         master,
-        text: str,
-        command,
+        text: str = "",
+        command=None,
         *,
         variant: str = "primary",
+        icon: str | None = None,
         width: int = 200,
         height: int = 40,
+        tooltip: str | None = None,
     ):
         super().__init__(master, bg=master.cget("bg") if isinstance(master, tk.Widget) else Theme.WHITE)
         self._command = command
         self._variant = variant
+        self._icon = icon
         self._state = "normal"
         self._width = width
         self._height = height
@@ -146,49 +154,104 @@ class FlatButton(tk.Frame):
             fill=self._bg_for("normal"),
             outline=self._border_for("normal"),
         )
-        self._label = self.canvas.create_text(
-            width // 2,
-            height // 2,
-            text=text,
-            fill=self._fg_for("normal"),
-            font=(Theme.font_family(), 13, "normal"),
-        )
+
+        self._icon_items: list[int] = []
+        self._label = None
+        if icon:
+            self._draw_icon()
+        if text:
+            text_x = width // 2
+            if icon:
+                text_x = width // 2 + 10
+            self._label = self.canvas.create_text(
+                text_x,
+                height // 2,
+                text=text,
+                fill=self._fg_for("normal"),
+                font=(Theme.font_family(), 13, "normal"),
+            )
 
         self.canvas.bind("<Enter>", self._on_enter)
         self.canvas.bind("<Leave>", self._on_leave)
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
 
+        if tooltip:
+            _Tooltip(self.canvas, tooltip)
+
+    # --- icon rendering ---
+
+    def _draw_icon(self):
+        """Draw the named icon centered in the canvas."""
+        cx = self._width // 2 if not self._label else 22
+        cy = self._height // 2
+        color = self._fg_for("normal")
+
+        if self._icon == "refresh":
+            r = 7
+            # Open ring (a circular-arrow). Two arc segments leave a gap so we
+            # can attach an arrowhead at the end — that small triangle is what
+            # makes it read as "refresh" rather than a generic spinner.
+            self._icon_items.append(self.canvas.create_arc(
+                cx - r, cy - r, cx + r, cy + r,
+                start=40, extent=270, style="arc",
+                outline=color, width=2,
+            ))
+            # Arrowhead at the end of the arc (top-right of the circle).
+            tip_x, tip_y = cx + r - 1, cy - r + 2
+            self._icon_items.append(self.canvas.create_polygon(
+                tip_x - 4, tip_y - 1,
+                tip_x + 4, tip_y - 1,
+                tip_x, tip_y + 4,
+                fill=color, outline=color,
+            ))
+
     # --- state helpers ---
 
     def _bg_for(self, state: str) -> str:
         if self._state == "disabled":
-            return Theme.CLOUD_GRAY
+            return Theme.CLOUD_GRAY if self._variant != "ghost" else self.cget("bg")
         if self._variant == "primary":
             return Theme.ELECTRIC_BLUE_HOVER if state == "hover" else Theme.ELECTRIC_BLUE
+        if self._variant == "ghost":
+            # Transparent at rest, faint blue tint on hover.
+            return "#E7EDFB" if state == "hover" else self.cget("bg")
         # secondary
         return Theme.LIGHT_ASH if state == "hover" else Theme.WHITE
 
-    def _fg_for(self, _state: str) -> str:
+    def _fg_for(self, state: str) -> str:
         if self._state == "disabled":
             return Theme.SILVER_FOG
         if self._variant == "primary":
             return Theme.WHITE
+        if self._variant == "ghost":
+            return Theme.ELECTRIC_BLUE if state == "hover" else Theme.GRAPHITE
         return Theme.GRAPHITE
 
-    def _border_for(self, _state: str) -> str:
+    def _border_for(self, state: str) -> str:
         if self._variant == "primary":
-            return self._bg_for("normal")
+            return self._bg_for(state)
+        if self._variant == "ghost":
+            return self._bg_for(state)
         return Theme.PALE_SILVER
 
     def _paint(self, state: str = "normal"):
         self.canvas.itemconfig(self._rect,
                                fill=self._bg_for(state),
                                outline=self._border_for(state))
-        self.canvas.itemconfig(self._label, fill=self._fg_for(state))
+        if self._label is not None:
+            self.canvas.itemconfig(self._label, fill=self._fg_for(state))
+        for item in self._icon_items:
+            kind = self.canvas.type(item)
+            color = self._fg_for(state)
+            if kind == "arc":
+                self.canvas.itemconfig(item, outline=color)
+            else:
+                self.canvas.itemconfig(item, fill=color, outline=color)
 
     def set_text(self, text: str):
-        self.canvas.itemconfig(self._label, text=text)
+        if self._label is not None:
+            self.canvas.itemconfig(self._label, text=text)
 
     def configure_state(self, state: str):
         self._state = state
@@ -219,6 +282,62 @@ class FlatButton(tk.Frame):
             self._command()
 
 
+class _Tooltip:
+    """Minimal Tesla-style tooltip: small Carbon Dark pill on hover."""
+
+    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 350):
+        self._widget = widget
+        self._text = text
+        self._delay = delay_ms
+        self._after_id: str | None = None
+        self._tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _e=None):
+        self._cancel()
+        self._after_id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self):
+        if self._after_id is not None:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip is not None:
+            return
+        x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 6
+        tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.configure(bg=Theme.CARBON_DARK)
+        try:
+            tw.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        label = tk.Label(
+            tw,
+            text=self._text,
+            bg=Theme.CARBON_DARK,
+            fg=Theme.WHITE,
+            font=(Theme.font_family(), 10),
+            padx=10,
+            pady=4,
+            bd=0,
+        )
+        label.pack()
+        tw.update_idletasks()
+        tw.wm_geometry(f"+{x - tw.winfo_width() // 2}+{y}")
+        self._tip = tw
+
+    def _hide(self, _e=None):
+        self._cancel()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
 # =====================================================================
 # Main window
 # =====================================================================
@@ -233,7 +352,7 @@ class PPTVoiceApp:
         self.root = root
         self.root.title(self.t("app.title"))
         self.root.geometry("720x760")
-        self.root.minsize(680, 700)
+        self.root.minsize(440, 560)
         self.root.configure(bg=Theme.WHITE)
 
         self.parser = CommandParser()
@@ -243,11 +362,18 @@ class PPTVoiceApp:
         self._audio_devices: list[tuple[int, str]] = []
         self._selected_device_idx: Optional[int] = None
 
+        # Labels whose ``wraplength`` should follow the container width.
+        # Each entry is ``(label, padding_compensation_px)``.
+        self._responsive_labels: list[tuple[tk.Label, int]] = []
+        self._last_wrap_width = 0
+
         self._configure_styles()
         self._build_ui()
         self._refresh_devices()
         self._check_accessibility()
         self._check_model()
+
+        self.root.bind("<Configure>", self._on_root_configure)
 
     # --- styles ---
 
@@ -288,19 +414,29 @@ class PPTVoiceApp:
         family = Theme.font_family()
         display = Theme.font_display()
 
-        container = tk.Frame(self.root, bg=Theme.WHITE)
-        container.pack(fill=tk.BOTH, expand=True, padx=40, pady=(32, 24))
+        # Outer side margins shrink slightly on narrow screens via the
+        # ``<Configure>`` handler below; start with the full Tesla-style 40px.
+        self._h_padding = 40
+
+        self._container = tk.Frame(self.root, bg=Theme.WHITE)
+        self._container.pack(fill=tk.BOTH, expand=True,
+                             padx=self._h_padding, pady=(32, 24))
+        container = self._container
 
         # Header — hero-like title & subtitle, no chrome.
-        tk.Label(
+        title_label = tk.Label(
             container,
             text=self.t("app.title"),
             font=(display, 28, "normal"),
             fg=Theme.CARBON_DARK,
             bg=Theme.WHITE,
-        ).pack(anchor="w")
+            anchor="w",
+            justify="left",
+        )
+        title_label.pack(anchor="w", fill=tk.X)
+        self._responsive_labels.append((title_label, 0))
 
-        tk.Label(
+        subtitle = tk.Label(
             container,
             text=self.t("app.subtitle"),
             font=(family, 13, "normal"),
@@ -308,19 +444,27 @@ class PPTVoiceApp:
             bg=Theme.WHITE,
             wraplength=640,
             justify="left",
-        ).pack(anchor="w", pady=(6, 22))
+            anchor="w",
+        )
+        subtitle.pack(anchor="w", fill=tk.X, pady=(6, 22))
+        self._responsive_labels.append((subtitle, 0))
 
         # Tip card — Light Ash surface, no border, flat.
         tip_card = tk.Frame(container, bg=Theme.LIGHT_ASH)
         tip_card.pack(fill=tk.X, pady=(0, 20))
-        tk.Label(
+        tip_title = tk.Label(
             tip_card,
             text=self.t("tip.title"),
             font=(family, 12, "normal"),
             fg=Theme.CARBON_DARK,
             bg=Theme.LIGHT_ASH,
-        ).pack(anchor="w", padx=16, pady=(12, 2))
-        tk.Label(
+            anchor="w",
+            justify="left",
+        )
+        tip_title.pack(anchor="w", fill=tk.X, padx=16, pady=(12, 2))
+        self._responsive_labels.append((tip_title, 32))
+
+        tip_l1 = tk.Label(
             tip_card,
             text=self.t("tip.line1"),
             font=(family, 12),
@@ -328,8 +472,12 @@ class PPTVoiceApp:
             bg=Theme.LIGHT_ASH,
             wraplength=620,
             justify="left",
-        ).pack(anchor="w", padx=16)
-        tk.Label(
+            anchor="w",
+        )
+        tip_l1.pack(anchor="w", fill=tk.X, padx=16)
+        self._responsive_labels.append((tip_l1, 32))
+
+        tip_l2 = tk.Label(
             tip_card,
             text=self.t("tip.line2"),
             font=(family, 12),
@@ -337,7 +485,10 @@ class PPTVoiceApp:
             bg=Theme.LIGHT_ASH,
             wraplength=620,
             justify="left",
-        ).pack(anchor="w", padx=16, pady=(0, 12))
+            anchor="w",
+        )
+        tip_l2.pack(anchor="w", fill=tk.X, padx=16, pady=(0, 12))
+        self._responsive_labels.append((tip_l2, 32))
 
         # Audio input panel
         tk.Label(
@@ -359,6 +510,18 @@ class PPTVoiceApp:
             bg=Theme.WHITE,
         ).pack(side=tk.LEFT, padx=(0, 10))
 
+        # Refresh button anchors to the right so the combobox flexes with width.
+        self.refresh_btn = FlatButton(
+            mic_row,
+            command=self._refresh_devices,
+            variant="ghost",
+            icon="refresh",
+            width=36,
+            height=36,
+            tooltip=self.t("btn.refresh"),
+        )
+        self.refresh_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
         self.device_var = tk.StringVar()
         self.device_combo = ttk.Combobox(
             mic_row,
@@ -366,22 +529,12 @@ class PPTVoiceApp:
             state="readonly",
             style="Tesla.TCombobox",
             font=(family, 12),
-            width=42,
         )
-        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.device_combo.bind("<<ComboboxSelected>>", self._on_device_selected)
 
-        self.refresh_btn = FlatButton(
-            mic_row,
-            text=self.t("btn.refresh"),
-            command=self._refresh_devices,
-            variant="secondary",
-            width=96,
-            height=34,
-        )
-        self.refresh_btn.pack(side=tk.LEFT)
-
-        # Status row — dot + label
+        # Status row — dot + label (label wraps so long status messages
+        # stay visible at narrow widths instead of being clipped on the right).
         status_row = tk.Frame(container, bg=Theme.WHITE)
         status_row.pack(fill=tk.X, pady=(0, 6))
         self.status_canvas = tk.Canvas(
@@ -398,8 +551,12 @@ class PPTVoiceApp:
             font=(family, 13, "normal"),
             fg=Theme.CARBON_DARK,
             bg=Theme.WHITE,
+            wraplength=500,
+            justify="left",
+            anchor="w",
         )
-        self.status_label.pack(side=tk.LEFT)
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._responsive_labels.append((self.status_label, 24))  # 14 dot + 10 pad
 
         # Live partial transcript
         tk.Label(
@@ -424,6 +581,7 @@ class PPTVoiceApp:
             wraplength=600,
         )
         self.partial_label.pack(fill=tk.X, padx=14, pady=12)
+        self._responsive_labels.append((self.partial_label, 28))
 
         # Command log
         tk.Label(
@@ -453,12 +611,14 @@ class PPTVoiceApp:
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        # CTA buttons (primary + secondary)
-        btn_row = tk.Frame(container, bg=Theme.WHITE)
-        btn_row.pack(fill=tk.X, pady=(22, 0))
+        # CTA buttons (primary + secondary). Side-by-side on desktop; the
+        # stop button drops below the start button on narrow widths via the
+        # ``<Configure>`` handler.
+        self._btn_row = tk.Frame(container, bg=Theme.WHITE)
+        self._btn_row.pack(fill=tk.X, pady=(22, 0))
 
         self.start_btn = FlatButton(
-            btn_row,
+            self._btn_row,
             text=self.t("btn.start"),
             command=self._on_start,
             variant="primary",
@@ -468,7 +628,7 @@ class PPTVoiceApp:
         self.start_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         self.stop_btn = FlatButton(
-            btn_row,
+            self._btn_row,
             text=self.t("btn.stop"),
             command=self._on_stop,
             variant="secondary",
@@ -477,27 +637,90 @@ class PPTVoiceApp:
         )
         self.stop_btn.pack(side=tk.LEFT)
         self.stop_btn.configure_state("disabled")
+        self._cta_stacked = False
 
         # Footer helper text — Tesla-style tertiary links
         footer = tk.Frame(self.root, bg=Theme.WHITE)
         footer.pack(fill=tk.X, side=tk.BOTTOM, padx=40, pady=(0, 18))
-        tk.Label(
+
+        footer_title = tk.Label(
             footer,
             text=self.t("commands.title"),
             font=(family, 11, "normal"),
             fg=Theme.CARBON_DARK,
             bg=Theme.WHITE,
-        ).pack(anchor="w")
+            anchor="w",
+            justify="left",
+        )
+        footer_title.pack(anchor="w", fill=tk.X)
+        self._responsive_labels.append((footer_title, 0))
+
         for key in ("commands.line1", "commands.line2", "commands.line3"):
-            tk.Label(
+            line = tk.Label(
                 footer,
                 text=self.t(key),
                 font=(family, 11),
                 fg=Theme.PEWTER,
                 bg=Theme.WHITE,
-            ).pack(anchor="w")
+                wraplength=640,
+                justify="left",
+                anchor="w",
+            )
+            line.pack(anchor="w", fill=tk.X)
+            self._responsive_labels.append((line, 0))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ==================== responsive layout ====================
+
+    def _on_root_configure(self, event):
+        """Reflow the UI when the window is resized."""
+        # We only care about resize events on the root itself; child widgets
+        # also fire <Configure> as they're laid out.
+        if event.widget is not self.root:
+            return
+
+        width = self.root.winfo_width()
+        if width <= 1:
+            return
+
+        # Tighten the outer side padding on narrow windows so the content has
+        # room to breathe. Tesla shrinks the chrome on mobile too.
+        new_pad = 40 if width >= 600 else (24 if width >= 480 else 16)
+        if new_pad != self._h_padding:
+            self._h_padding = new_pad
+            self._container.pack_configure(padx=new_pad)
+
+        # Recompute wraplength for every text-flow label. We use the actual
+        # container width minus each label's local padding. The threshold
+        # avoids a feedback loop where wrap → height change → another resize.
+        wrap_base = max(width - 2 * self._h_padding, 200)
+        if abs(wrap_base - self._last_wrap_width) >= 4:
+            self._last_wrap_width = wrap_base
+            for label, compensation in self._responsive_labels:
+                target = max(wrap_base - compensation, 160)
+                try:
+                    label.configure(wraplength=target)
+                except tk.TclError:
+                    pass
+
+        # Stack the CTA pair vertically when the row would overflow.
+        # 220 (start) + 12 (gap) + 160 (stop) = 392px. Anything narrower
+        # than ~440 internal width should stack.
+        usable = width - 2 * self._h_padding
+        should_stack = usable < 410
+        if should_stack and not self._cta_stacked:
+            self.stop_btn.pack_forget()
+            self.start_btn.pack_forget()
+            self.start_btn.pack(anchor="w", pady=(0, 10))
+            self.stop_btn.pack(anchor="w")
+            self._cta_stacked = True
+        elif not should_stack and self._cta_stacked:
+            self.stop_btn.pack_forget()
+            self.start_btn.pack_forget()
+            self.start_btn.pack(side=tk.LEFT, padx=(0, 12))
+            self.stop_btn.pack(side=tk.LEFT)
+            self._cta_stacked = False
 
     # ==================== audio devices ====================
 
