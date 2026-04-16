@@ -102,7 +102,19 @@ jobs:
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --no-progress -y
+        run: |
+          choco install innosetup --no-progress -y
+          # ChineseSimplified.isl is not bundled with the default Inno Setup
+          # install (it lives under "Unofficial Translations"), so fetch it
+          # directly from the official issrc source tree.
+          $langDir = "C:\Program Files (x86)\Inno Setup 6\Languages"
+          $target  = Join-Path $langDir "ChineseSimplified.isl"
+          if (-not (Test-Path $target)) {
+            Invoke-WebRequest `
+              -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl" `
+              -OutFile $target
+          }
+          Get-Item $target | Format-List Name, Length
 
       - name: Compile installer
         shell: pwsh
