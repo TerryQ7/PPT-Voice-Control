@@ -1,12 +1,16 @@
-name: Build Windows Executable
+name: Release (Windows bilingual build)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -14,12 +18,12 @@ jobs:
         include:
           - lang: zh
             entry: main.py
-            name: PPT语音控制助手
-            artifact: PPT语音控制助手-Windows
+            app_name: PPT语音控制助手
+            asset_base: PPT-Voice-Control-zh-CN-Windows
           - lang: en
             entry: main_en.py
-            name: PPT-Voice-Control
-            artifact: PPT-Voice-Control-Windows
+            app_name: PPT-Voice-Control
+            asset_base: PPT-Voice-Control-en-US-Windows
     steps:
       - uses: actions/checkout@v4
 
@@ -39,21 +43,18 @@ jobs:
           python -c "
           from modelscope.hub.snapshot_download import snapshot_download
           import shutil, os
-          print('Downloading Paraformer model...')
           model_dir = snapshot_download('iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch')
-          print(f'Model downloaded to: {model_dir}')
           dest = 'funasr_model'
           if os.path.exists(dest):
               shutil.rmtree(dest)
           shutil.copytree(model_dir, dest)
-          print(f'Model copied to: {dest}')
-          print(f'Contents: {os.listdir(dest)}')
+          print(os.listdir(dest))
           "
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (bundled model)
         run: |
           pyinstaller `
-            --name "${{ matrix.name }}" `
+            --name "${{ matrix.app_name }}" `
             --windowed `
             --onedir `
             --noconfirm `
@@ -72,9 +73,26 @@ jobs:
             --collect-all funasr `
             ${{ matrix.entry }}
 
-      - name: Upload artifact
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $src = "dist/${{ matrix.app_name }}"
+          $zip = "release/${{ matrix.asset_base }}.zip"
+          New-Item -ItemType Directory -Force -Path "release" | Out-Null
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path "$src/*" -DestinationPath $zip -CompressionLevel Optimal
+          Get-Item $zip | Format-List
+
+      - name: Upload release zip
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.name }}/
+          name: ${{ matrix.asset_base }}
+          path: release/${{ matrix.asset_base }}.zip
           retention-days: 30
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/${{ matrix.asset_base }}.zip
+          generate_release_notes: true

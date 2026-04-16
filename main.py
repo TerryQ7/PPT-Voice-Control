@@ -1,8 +1,17 @@
-"""PPT语音控制助手 - 主程序入口
+"""PPT Voice Control Assistant — bilingual main entry.
 
-实时监听麦克风，识别中英文翻页命令，自动控制PPT翻页。
+The same app runs in Simplified Chinese or English; the locale is selected at
+startup via ``--lang {zh|en}`` or the ``PPT_LANG`` environment variable.
+
+The UI is inspired by Tesla's marketing site as described in ``DESIGN.md``:
+pure white canvas, Carbon Dark text, Electric Blue as the sole accent, flat
+surfaces with no shadows, Universal-Sans-style typography (approximated with
+system fonts), and a single blue CTA for the primary action.
 """
 
+from __future__ import annotations
+
+import argparse
 import datetime
 import logging
 import os
@@ -13,8 +22,9 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 from typing import Optional
 
+
 class _NullStream:
-    """兼容无控制台窗口场景的标准输出/错误占位流。"""
+    """Placeholder stream for ``--windowed`` builds without a console."""
 
     def write(self, _data):
         return 0
@@ -27,7 +37,6 @@ class _NullStream:
 
 
 def _ensure_std_streams():
-    """在 windowed 打包下，避免第三方库向 None 的 stderr/stdout 写入。"""
     for name in ("stdout", "stderr", "__stdout__", "__stderr__"):
         if getattr(sys, name, None) is None:
             setattr(sys, name, _NullStream())
@@ -38,9 +47,10 @@ _ensure_std_streams()
 import sounddevice as sd
 
 from config import ASR_ENGINE, VOSK_MODEL_PATH, MODEL_DIR, DEFAULT_VOSK_MODEL, VOSK_MODEL_URLS
-from command_parser import CommandParser, Command
+from command_parser import CommandParser, Command, CommandType
 from ppt_controller import PPTController, check_accessibility_permission
 from asr_engine import VoskEngine, FunASREngine, ASREngineBase, get_available_devices
+from i18n import Translator, normalize_locale
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -49,14 +59,182 @@ logging.basicConfig(
 )
 
 
-class PPTVoiceApp:
-    """PPT 语音控制助手 GUI 应用。"""
+# =====================================================================
+# Tesla-inspired design tokens (mirrors DESIGN.md)
+# =====================================================================
 
-    def __init__(self, root: tk.Tk):
+class Theme:
+    # Colors
+    ELECTRIC_BLUE = "#3E6AE1"
+    ELECTRIC_BLUE_HOVER = "#3457B2"
+    WHITE = "#FFFFFF"
+    LIGHT_ASH = "#F4F4F4"
+    CARBON_DARK = "#171A20"
+    GRAPHITE = "#393C41"
+    PEWTER = "#5C5E62"
+    SILVER_FOG = "#8E8E8E"
+    CLOUD_GRAY = "#EEEEEE"
+    PALE_SILVER = "#D0D1D2"
+    SUCCESS = "#3E6AE1"   # status dot uses the same blue
+    WARNING = "#B4741A"   # muted amber for warnings
+    DANGER = "#C2361A"    # muted red for errors
+
+    # Type scale (Universal Sans is not freely redistributable; fall back to
+    # system fonts that carry the same geometric feel: SF Pro on macOS,
+    # Segoe UI Variable on Windows, and plain sans elsewhere.)
+    @staticmethod
+    def font_family() -> str:
+        system = platform.system()
+        if system == "Darwin":
+            return "SF Pro Text"
+        if system == "Windows":
+            return "Segoe UI Variable"
+        return "Helvetica"
+
+    @staticmethod
+    def font_display() -> str:
+        system = platform.system()
+        if system == "Darwin":
+            return "SF Pro Display"
+        if system == "Windows":
+            return "Segoe UI Variable"
+        return "Helvetica"
+
+
+# =====================================================================
+# Minimal flat "CTA" button (no shadows, 4px-ish radius via a solid fill)
+# =====================================================================
+
+class FlatButton(tk.Frame):
+    """A flat, Tesla-style CTA button for Tk.
+
+    Tk doesn't support rounded corners on widgets directly. We approximate the
+    4px radius by drawing the rectangle on a Canvas and letting hover/active
+    states change the fill color — exactly Tesla's colour-only interaction
+    pattern from DESIGN.md.
+    """
+
+    def __init__(
+        self,
+        master,
+        text: str,
+        command,
+        *,
+        variant: str = "primary",
+        width: int = 200,
+        height: int = 40,
+    ):
+        super().__init__(master, bg=master.cget("bg") if isinstance(master, tk.Widget) else Theme.WHITE)
+        self._command = command
+        self._variant = variant
+        self._state = "normal"
+        self._width = width
+        self._height = height
+
+        self.canvas = tk.Canvas(
+            self,
+            width=width,
+            height=height,
+            highlightthickness=0,
+            bd=0,
+            bg=self.cget("bg"),
+        )
+        self.canvas.pack()
+
+        self._rect = self.canvas.create_rectangle(
+            0, 0, width, height,
+            fill=self._bg_for("normal"),
+            outline=self._border_for("normal"),
+        )
+        self._label = self.canvas.create_text(
+            width // 2,
+            height // 2,
+            text=text,
+            fill=self._fg_for("normal"),
+            font=(Theme.font_family(), 13, "normal"),
+        )
+
+        self.canvas.bind("<Enter>", self._on_enter)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+
+    # --- state helpers ---
+
+    def _bg_for(self, state: str) -> str:
+        if self._state == "disabled":
+            return Theme.CLOUD_GRAY
+        if self._variant == "primary":
+            return Theme.ELECTRIC_BLUE_HOVER if state == "hover" else Theme.ELECTRIC_BLUE
+        # secondary
+        return Theme.LIGHT_ASH if state == "hover" else Theme.WHITE
+
+    def _fg_for(self, _state: str) -> str:
+        if self._state == "disabled":
+            return Theme.SILVER_FOG
+        if self._variant == "primary":
+            return Theme.WHITE
+        return Theme.GRAPHITE
+
+    def _border_for(self, _state: str) -> str:
+        if self._variant == "primary":
+            return self._bg_for("normal")
+        return Theme.PALE_SILVER
+
+    def _paint(self, state: str = "normal"):
+        self.canvas.itemconfig(self._rect,
+                               fill=self._bg_for(state),
+                               outline=self._border_for(state))
+        self.canvas.itemconfig(self._label, fill=self._fg_for(state))
+
+    def set_text(self, text: str):
+        self.canvas.itemconfig(self._label, text=text)
+
+    def configure_state(self, state: str):
+        self._state = state
+        self._paint("normal")
+
+    # --- events ---
+
+    def _on_enter(self, _e):
+        if self._state == "disabled":
+            return
+        self._paint("hover")
+
+    def _on_leave(self, _e):
+        if self._state == "disabled":
+            return
+        self._paint("normal")
+
+    def _on_click(self, _e):
+        if self._state == "disabled":
+            return
+        self._paint("hover")
+
+    def _on_release(self, _e):
+        if self._state == "disabled":
+            return
+        self._paint("hover")
+        if callable(self._command):
+            self._command()
+
+
+# =====================================================================
+# Main window
+# =====================================================================
+
+class PPTVoiceApp:
+    """Tesla-inspired PPT voice controller."""
+
+    def __init__(self, root: tk.Tk, locale: str = "zh"):
+        self.t = Translator(locale).t
+        self.locale = locale
+
         self.root = root
-        self.root.title("PPT 语音控制助手")
-        self.root.geometry("620x650")
-        self.root.resizable(False, False)
+        self.root.title(self.t("app.title"))
+        self.root.geometry("720x760")
+        self.root.minsize(680, 700)
+        self.root.configure(bg=Theme.WHITE)
 
         self.parser = CommandParser()
         self.controller = PPTController()
@@ -65,115 +243,273 @@ class PPTVoiceApp:
         self._audio_devices: list[tuple[int, str]] = []
         self._selected_device_idx: Optional[int] = None
 
+        self._configure_styles()
         self._build_ui()
         self._refresh_devices()
         self._check_accessibility()
         self._check_model()
 
-    # ==================== UI ====================
+    # --- styles ---
+
+    def _configure_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        family = Theme.font_family()
+        style.configure(
+            "Tesla.TCombobox",
+            fieldbackground=Theme.WHITE,
+            background=Theme.WHITE,
+            foreground=Theme.CARBON_DARK,
+            arrowcolor=Theme.CARBON_DARK,
+            bordercolor=Theme.PALE_SILVER,
+            lightcolor=Theme.PALE_SILVER,
+            darkcolor=Theme.PALE_SILVER,
+            borderwidth=1,
+            padding=6,
+        )
+        style.map(
+            "Tesla.TCombobox",
+            fieldbackground=[("readonly", Theme.WHITE)],
+            foreground=[("readonly", Theme.CARBON_DARK)],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", Theme.WHITE)
+        self.root.option_add("*TCombobox*Listbox.foreground", Theme.CARBON_DARK)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", Theme.ELECTRIC_BLUE)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", Theme.WHITE)
+        self.root.option_add("*TCombobox*Listbox.font", (family, 12))
+
+    # --- layout ---
 
     def _build_ui(self):
-        self.root.configure(bg="#f0f0f0")
+        family = Theme.font_family()
+        display = Theme.font_display()
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Title.TLabel", font=("Helvetica", 18, "bold"), background="#f0f0f0")
-        style.configure("Status.TLabel", font=("Helvetica", 13), background="#f0f0f0")
-        style.configure("Start.TButton", font=("Helvetica", 13), padding=10)
-        style.configure("Stop.TButton", font=("Helvetica", 13), padding=10)
-        style.configure("Info.TLabel", font=("Helvetica", 11), background="#f0f0f0", foreground="#666")
-        style.configure("Warn.TLabel", font=("Helvetica", 10), background="#fff3cd", foreground="#856404")
-        style.configure("Refresh.TButton", font=("Helvetica", 10), padding=2)
+        container = tk.Frame(self.root, bg=Theme.WHITE)
+        container.pack(fill=tk.BOTH, expand=True, padx=40, pady=(32, 24))
 
-        main_frame = ttk.Frame(self.root, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(main_frame, text="PPT 语音控制助手", style="Title.TLabel").pack(pady=(0, 5))
-        ttk.Label(
-            main_frame,
-            text='说出 "下一页 / next slide / 第N页" 等指令即可自动控制PPT（支持中英文）',
-            style="Info.TLabel",
-        ).pack(pady=(0, 10))
-
-        # 提示：PPT 必须前台 + 远程说明
-        tip_frame = tk.Frame(main_frame, bg="#fff3cd", relief="groove", bd=1, padx=8, pady=6)
-        tip_frame.pack(fill=tk.X, pady=(0, 10))
+        # Header — hero-like title & subtitle, no chrome.
         tk.Label(
-            tip_frame, text=(
-                "提示：① PPT 放映窗口必须置于最前台（焦点窗口），否则按键无法送达\n"
-                "　　　② 远程会议时请选择「系统音频(Loopback)」作为音频源"
-            ),
-            font=("Helvetica", 10), bg="#fff3cd", fg="#856404", justify=tk.LEFT, anchor="w",
-        ).pack(fill=tk.X)
+            container,
+            text=self.t("app.title"),
+            font=(display, 28, "normal"),
+            fg=Theme.CARBON_DARK,
+            bg=Theme.WHITE,
+        ).pack(anchor="w")
 
-        # 音频设备选择
-        device_frame = ttk.LabelFrame(main_frame, text="音频输入设置", padding=8)
-        device_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(
+            container,
+            text=self.t("app.subtitle"),
+            font=(family, 13, "normal"),
+            fg=Theme.PEWTER,
+            bg=Theme.WHITE,
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 22))
 
-        mic_row = ttk.Frame(device_frame)
-        mic_row.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(mic_row, text="音频设备:", font=("Helvetica", 11)).pack(side=tk.LEFT, padx=(0, 8))
+        # Tip card — Light Ash surface, no border, flat.
+        tip_card = tk.Frame(container, bg=Theme.LIGHT_ASH)
+        tip_card.pack(fill=tk.X, pady=(0, 20))
+        tk.Label(
+            tip_card,
+            text=self.t("tip.title"),
+            font=(family, 12, "normal"),
+            fg=Theme.CARBON_DARK,
+            bg=Theme.LIGHT_ASH,
+        ).pack(anchor="w", padx=16, pady=(12, 2))
+        tk.Label(
+            tip_card,
+            text=self.t("tip.line1"),
+            font=(family, 12),
+            fg=Theme.GRAPHITE,
+            bg=Theme.LIGHT_ASH,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=16)
+        tk.Label(
+            tip_card,
+            text=self.t("tip.line2"),
+            font=(family, 12),
+            fg=Theme.GRAPHITE,
+            bg=Theme.LIGHT_ASH,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+
+        # Audio input panel
+        tk.Label(
+            container,
+            text=self.t("section.audio"),
+            font=(family, 13, "normal"),
+            fg=Theme.CARBON_DARK,
+            bg=Theme.WHITE,
+        ).pack(anchor="w", pady=(2, 8))
+
+        mic_row = tk.Frame(container, bg=Theme.WHITE)
+        mic_row.pack(fill=tk.X, pady=(0, 18))
+
+        tk.Label(
+            mic_row,
+            text=self.t("label.device"),
+            font=(family, 12),
+            fg=Theme.PEWTER,
+            bg=Theme.WHITE,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
         self.device_var = tk.StringVar()
         self.device_combo = ttk.Combobox(
-            mic_row, textvariable=self.device_var, state="readonly",
-            font=("Helvetica", 10), width=42,
+            mic_row,
+            textvariable=self.device_var,
+            state="readonly",
+            style="Tesla.TCombobox",
+            font=(family, 12),
+            width=42,
         )
-        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         self.device_combo.bind("<<ComboboxSelected>>", self._on_device_selected)
-        ttk.Button(
-            mic_row, text="刷新", style="Refresh.TButton", command=self._refresh_devices,
-        ).pack(side=tk.LEFT)
 
-        # 状态行
-        status_frame = ttk.Frame(main_frame)
-        status_frame.pack(fill=tk.X, pady=(0, 8))
-        self.status_canvas = tk.Canvas(
-            status_frame, width=16, height=16, bg="#f0f0f0", highlightthickness=0
+        self.refresh_btn = FlatButton(
+            mic_row,
+            text=self.t("btn.refresh"),
+            command=self._refresh_devices,
+            variant="secondary",
+            width=96,
+            height=34,
         )
-        self.status_canvas.pack(side=tk.LEFT, padx=(0, 8))
-        self.status_dot = self.status_canvas.create_oval(2, 2, 14, 14, fill="#999", outline="")
-        self.status_label = ttk.Label(status_frame, text="未启动", style="Status.TLabel")
+        self.refresh_btn.pack(side=tk.LEFT)
+
+        # Status row — dot + label
+        status_row = tk.Frame(container, bg=Theme.WHITE)
+        status_row.pack(fill=tk.X, pady=(0, 6))
+        self.status_canvas = tk.Canvas(
+            status_row, width=14, height=14,
+            bg=Theme.WHITE, highlightthickness=0, bd=0,
+        )
+        self.status_canvas.pack(side=tk.LEFT, padx=(0, 10), pady=(2, 0))
+        self.status_dot = self.status_canvas.create_oval(
+            1, 1, 13, 13, fill=Theme.SILVER_FOG, outline=""
+        )
+        self.status_label = tk.Label(
+            status_row,
+            text=self.t("status.idle"),
+            font=(family, 13, "normal"),
+            fg=Theme.CARBON_DARK,
+            bg=Theme.WHITE,
+        )
         self.status_label.pack(side=tk.LEFT)
 
-        ttk.Label(main_frame, text="实时识别:", style="Info.TLabel").pack(anchor=tk.W, pady=(5, 2))
-        self.partial_var = tk.StringVar(value="...")
-        self.partial_label = ttk.Label(
-            main_frame, textvariable=self.partial_var, font=("Helvetica", 12), foreground="#aaa",
-            background="#fff", relief="sunken", padding=6, wraplength=560
-        )
-        self.partial_label.pack(fill=tk.X, pady=(0, 8))
+        # Live partial transcript
+        tk.Label(
+            container,
+            text=self.t("label.partial"),
+            font=(family, 12, "normal"),
+            fg=Theme.PEWTER,
+            bg=Theme.WHITE,
+        ).pack(anchor="w", pady=(12, 6))
 
-        ttk.Label(main_frame, text="命令执行记录:", style="Info.TLabel").pack(anchor=tk.W, pady=(0, 2))
+        partial_surface = tk.Frame(container, bg=Theme.LIGHT_ASH)
+        partial_surface.pack(fill=tk.X)
+        self.partial_var = tk.StringVar(value=self.t("placeholder.partial"))
+        self.partial_label = tk.Label(
+            partial_surface,
+            textvariable=self.partial_var,
+            font=(family, 13),
+            fg=Theme.SILVER_FOG,
+            bg=Theme.LIGHT_ASH,
+            anchor="w",
+            justify="left",
+            wraplength=600,
+        )
+        self.partial_label.pack(fill=tk.X, padx=14, pady=12)
+
+        # Command log
+        tk.Label(
+            container,
+            text=self.t("label.log"),
+            font=(family, 12, "normal"),
+            fg=Theme.PEWTER,
+            bg=Theme.WHITE,
+        ).pack(anchor="w", pady=(18, 6))
+
+        log_surface = tk.Frame(container, bg=Theme.LIGHT_ASH)
+        log_surface.pack(fill=tk.BOTH, expand=True)
+        mono_family = "Menlo" if platform.system() == "Darwin" else ("Consolas" if platform.system() == "Windows" else "Courier")
         self.log_text = scrolledtext.ScrolledText(
-            main_frame, height=8, font=("Courier", 11), state=tk.DISABLED, wrap=tk.WORD
+            log_surface,
+            height=8,
+            font=(mono_family, 11),
+            state=tk.DISABLED,
+            wrap=tk.WORD,
+            bg=Theme.LIGHT_ASH,
+            fg=Theme.GRAPHITE,
+            borderwidth=0,
+            highlightthickness=0,
+            relief="flat",
+            padx=14,
+            pady=10,
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X)
-        self.start_btn = ttk.Button(
-            btn_frame, text="▶  开始监听", style="Start.TButton", command=self._on_start
+        # CTA buttons (primary + secondary)
+        btn_row = tk.Frame(container, bg=Theme.WHITE)
+        btn_row.pack(fill=tk.X, pady=(22, 0))
+
+        self.start_btn = FlatButton(
+            btn_row,
+            text=self.t("btn.start"),
+            command=self._on_start,
+            variant="primary",
+            width=220,
+            height=44,
         )
-        self.start_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
-        self.stop_btn = ttk.Button(
-            btn_frame, text="■  停止", style="Stop.TButton", command=self._on_stop, state=tk.DISABLED
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 12))
+
+        self.stop_btn = FlatButton(
+            btn_row,
+            text=self.t("btn.stop"),
+            command=self._on_stop,
+            variant="secondary",
+            width=160,
+            height=44,
         )
-        self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
+        self.stop_btn.pack(side=tk.LEFT)
+        self.stop_btn.configure_state("disabled")
+
+        # Footer helper text — Tesla-style tertiary links
+        footer = tk.Frame(self.root, bg=Theme.WHITE)
+        footer.pack(fill=tk.X, side=tk.BOTTOM, padx=40, pady=(0, 18))
+        tk.Label(
+            footer,
+            text=self.t("commands.title"),
+            font=(family, 11, "normal"),
+            fg=Theme.CARBON_DARK,
+            bg=Theme.WHITE,
+        ).pack(anchor="w")
+        for key in ("commands.line1", "commands.line2", "commands.line3"):
+            tk.Label(
+                footer,
+                text=self.t(key),
+                font=(family, 11),
+                fg=Theme.PEWTER,
+                bg=Theme.WHITE,
+            ).pack(anchor="w")
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ==================== 音频设备管理 ====================
+    # ==================== audio devices ====================
 
     def _refresh_devices(self):
-        """刷新可用音频输入设备列表。"""
         self._audio_devices = get_available_devices()
         display_names = [f"[{idx}] {name}" for idx, name in self._audio_devices]
 
-        default_label = "(系统默认)"
+        default_label = self.t("label.default_device")
         try:
             default_dev = sd.query_devices(kind="input")
             if default_dev:
-                default_label = f"(系统默认: {default_dev['name']})"
+                default_label = self.t("label.default_device_named", name=default_dev["name"])
         except Exception:
             pass
 
@@ -190,43 +526,44 @@ class PPTVoiceApp:
         else:
             self._selected_device_idx = self._audio_devices[sel - 1][0]
 
-    # ==================== 权限检查 ====================
+    # ==================== permissions ====================
 
     def _check_accessibility(self):
         if platform.system() != "Darwin":
             return
         if not check_accessibility_permission():
-            self._log("⚠ 未授予辅助功能权限，键盘模拟将无法工作。")
-            self._log("  请前往: 系统设置 → 隐私与安全性 → 辅助功能")
+            self._log(self.t("msg.accessibility_missing"))
+            self._log(self.t("msg.accessibility_path"))
             messagebox.showwarning(
-                "需要辅助功能权限",
-                "未检测到辅助功能权限，PPT翻页将无法工作。\n\n"
-                "请前往:\n系统设置 → 隐私与安全性 → 辅助功能\n\n"
-                "添加并启用当前终端应用。",
+                self.t("dialog.accessibility_title"),
+                self.t("dialog.accessibility_body"),
             )
 
-    # ==================== 模型检查 ====================
+    # ==================== model check ====================
 
     def _check_model(self):
         if ASR_ENGINE == "funasr":
-            self._set_status("就绪 (FunASR)，点击「开始监听」", "#4CAF50")
-            self._log("引擎: FunASR Paraformer (首次启动需下载模型，约1GB)")
+            self._set_status(self.t("status.ready_funasr"), Theme.ELECTRIC_BLUE)
+            self._log(self.t("msg.engine_funasr_hint"))
             return
 
         if os.path.isdir(VOSK_MODEL_PATH):
-            self._set_status("就绪 (Vosk)，点击「开始监听」", "#4CAF50")
+            self._set_status(self.t("status.ready_vosk"), Theme.ELECTRIC_BLUE)
             return
 
-        self._set_status("模型未下载", "#FF9800")
-        if messagebox.askyesno("模型未找到", f"Vosk 模型不存在，是否立即下载？\n({DEFAULT_VOSK_MODEL})"):
+        self._set_status(self.t("status.download_model"), Theme.WARNING)
+        if messagebox.askyesno(
+            self.t("dialog.model_missing_title"),
+            self.t("dialog.model_missing_body", model=DEFAULT_VOSK_MODEL),
+        ):
             self._download_model_async()
         else:
-            self._log("⚠ 请手动运行 python download_model.py 下载模型")
+            self._log(self.t("msg.download_manual"))
 
     def _download_model_async(self):
-        self.start_btn.config(state=tk.DISABLED)
-        self._set_status("正在下载模型...", "#2196F3")
-        self._log("开始下载语音识别模型，请稍候...")
+        self.start_btn.configure_state("disabled")
+        self._set_status(self.t("status.downloading", pct=0), Theme.ELECTRIC_BLUE)
+        self._log(self.t("msg.download_start"))
 
         def _do_download():
             try:
@@ -234,7 +571,9 @@ class PPTVoiceApp:
                 download_and_extract(
                     VOSK_MODEL_URLS[DEFAULT_VOSK_MODEL], MODEL_DIR,
                     progress_cb=lambda pct: self.root.after(
-                        0, lambda: self._set_status(f"下载中 {pct:.0f}%...", "#2196F3")
+                        0, lambda: self._set_status(
+                            self.t("status.downloading", pct=pct), Theme.ELECTRIC_BLUE
+                        )
                     ),
                 )
                 self.root.after(0, self._on_download_done, True)
@@ -245,23 +584,26 @@ class PPTVoiceApp:
 
     def _on_download_done(self, success: bool, error: str = ""):
         if success:
-            self._set_status("模型下载完成，可以开始", "#4CAF50")
-            self._log("✓ 模型下载完成！")
+            self._set_status(self.t("status.download_done"), Theme.ELECTRIC_BLUE)
+            self._log(self.t("msg.download_done"))
         else:
-            self._set_status("下载失败", "#F44336")
-            self._log(f"✗ 下载失败: {error}")
-        self.start_btn.config(state=tk.NORMAL)
+            self._set_status(self.t("status.download_failed"), Theme.DANGER)
+            self._log(self.t("msg.download_failed", error=error))
+        self.start_btn.configure_state("normal")
 
-    # ==================== 开始 / 停止 ====================
+    # ==================== start / stop ====================
 
     def _on_start(self):
         if ASR_ENGINE == "vosk" and not os.path.isdir(VOSK_MODEL_PATH):
-            messagebox.showerror("错误", "Vosk 模型未下载，无法启动。")
+            messagebox.showerror(
+                self.t("dialog.model_vosk_error_title"),
+                self.t("dialog.model_vosk_error_body"),
+            )
             return
 
-        self.start_btn.config(state=tk.DISABLED)
-        self._set_status("正在加载模型...", "#2196F3")
-        self._log("正在加载语音识别模型，请稍候...")
+        self.start_btn.configure_state("disabled")
+        self._set_status(self.t("status.loading_model"), Theme.ELECTRIC_BLUE)
+        self._log(self.t("status.loading_model"))
         self.root.update()
 
         device_idx = self._selected_device_idx
@@ -273,8 +615,11 @@ class PPTVoiceApp:
                     engine = FunASREngine(device_index=device_idx)
                 else:
                     engine = VoskEngine(model_path=VOSK_MODEL_PATH, device_index=device_idx)
-                engine.start(on_partial=self._on_partial, on_final=self._on_final,
-                             on_no_audio_warning=self._on_no_audio_warning)
+                engine.start(
+                    on_partial=self._on_partial,
+                    on_final=self._on_final,
+                    on_no_audio_warning=self._on_no_audio_warning,
+                )
                 self.root.after(0, self._on_engine_started, engine)
             except Exception as e:
                 self.root.after(0, self._on_engine_failed, str(e))
@@ -286,39 +631,37 @@ class PPTVoiceApp:
         self.parser.reset()
         name = "FunASR" if ASR_ENGINE == "funasr" else "Vosk"
         device_name = self.device_var.get()
-        self._set_status(f"正在监听... ({name})", "#4CAF50")
-        self._log(f"--- 开始监听 ({name}) ---")
-        self._log(f"音频设备: {device_name}")
-        self.stop_btn.config(state=tk.NORMAL)
+        self._set_status(self.t("status.listening", engine=name), Theme.ELECTRIC_BLUE)
+        self._log(self.t("msg.start_listening", engine=name))
+        self._log(self.t("msg.audio_device", name=device_name))
+        self.stop_btn.configure_state("normal")
         self.device_combo.config(state=tk.DISABLED)
 
     def _on_engine_failed(self, error: str):
-        self._set_status("启动失败", "#F44336")
-        self._log(f"✗ 启动失败: {error}")
-        self.start_btn.config(state=tk.NORMAL)
-        messagebox.showerror("启动失败", error)
+        self._set_status(self.t("status.start_failed"), Theme.DANGER)
+        self._log(f"✗ {error}")
+        self.start_btn.configure_state("normal")
+        messagebox.showerror(self.t("dialog.start_failed_title"), error)
 
     def _on_stop(self):
         if self.engine and self.engine.is_running():
             self.engine.stop()
-        self._set_status("已停止", "#999")
-        self._log("--- 停止监听 ---")
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
+        self._set_status(self.t("status.stopped"), Theme.SILVER_FOG)
+        self._log(self.t("msg.stop_listening"))
+        self.start_btn.configure_state("normal")
+        self.stop_btn.configure_state("disabled")
         self.device_combo.config(state="readonly")
-        self.partial_var.set("...")
+        self.partial_var.set(self.t("placeholder.partial"))
 
     def _on_close(self):
         if self.engine and self.engine.is_running():
             self.engine.stop()
         self.root.destroy()
-        # 兜底：若第三方库的非 daemon 线程阻止进程退出，3 秒后强制终止。
-        # 该计时器本身是 daemon 线程——正常退出时会随主线程一起消亡，不会触发。
         _force_exit = threading.Timer(3.0, os._exit, args=(0,))
         _force_exit.daemon = True
         _force_exit.start()
 
-    # ==================== 识别回调 ====================
+    # ==================== recognition callbacks ====================
 
     def _on_partial(self, text: str):
         self.root.after(0, self._handle_partial, text)
@@ -330,8 +673,8 @@ class PPTVoiceApp:
         self.root.after(0, self._handle_no_audio_warning, current_device)
 
     def _handle_no_audio_warning(self, current_device: str):
-        self._set_status("未检测到音频输入!", "#FF9800")
-        self._log(f"⚠ 连续多秒未检测到有效音频输入，当前设备: {current_device}")
+        self._set_status(self.t("status.no_audio"), Theme.WARNING)
+        self._log(self.t("msg.no_audio_log", name=current_device))
 
         other_devices = []
         for idx, name in self._audio_devices:
@@ -343,44 +686,49 @@ class PPTVoiceApp:
 
         device_list = "\n".join(f"  - {name}" for name in other_devices[:8])
         if not device_list:
-            device_list = "  (无其他可用设备)"
+            device_list = self.t("dialog.no_audio_none")
 
         messagebox.showwarning(
-            "未检测到音频输入",
-            f"已持续多秒未检测到有效音频信号，当前麦克风可能未正常工作。\n\n"
-            f"当前设备: {current_device}\n\n"
-            f"请检查:\n"
-            f"1. 麦克风是否已连接并开启\n"
-            f"2. 系统音频输入设置是否正确\n"
-            f"3. 是否选择了正确的音频输入设备\n\n"
-            f"其他可用设备:\n{device_list}\n\n"
-            f"可点击「停止」后在设备列表中切换，再重新开始监听。",
+            self.t("dialog.no_audio_title"),
+            self.t("dialog.no_audio_body", name=current_device, devices=device_list),
         )
 
     def _handle_partial(self, text: str):
         self.partial_var.set(text)
-        self.partial_label.configure(foreground="#aaa")
+        self.partial_label.configure(foreground=Theme.SILVER_FOG)
         cmd = self.parser.parse(text)
         if cmd:
             self._execute_command(cmd, text, is_partial=True)
 
     def _handle_final(self, text: str):
         self.partial_var.set(text)
-        self.partial_label.configure(foreground="#333")
+        self.partial_label.configure(foreground=Theme.CARBON_DARK)
         cmd = self.parser.parse(text)
         if cmd:
             self._execute_command(cmd, text, is_partial=False)
 
     def _execute_command(self, cmd: Command, raw_text: str, is_partial: bool):
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        source = "部分" if is_partial else "最终"
-        self._log(f'[{now}] ({source}) "{raw_text}" → {cmd}')
+        source = self.t("log.source_partial" if is_partial else "log.source_final")
+        label = self._format_command(cmd)
+        self._log(f'[{now}] ({source}) "{raw_text}" → {label}')
         try:
             self.controller.execute(cmd)
         except Exception as e:
-            self._log(f"  ✗ 执行失败: {e}")
+            self._log(self.t("msg.exec_failed", error=str(e)))
 
-    # ==================== 工具方法 ====================
+    def _format_command(self, cmd: Command) -> str:
+        mapping = {
+            CommandType.NEXT: self.t("cmd.next"),
+            CommandType.PREV: self.t("cmd.prev"),
+            CommandType.FIRST: self.t("cmd.first"),
+            CommandType.LAST: self.t("cmd.last"),
+        }
+        if cmd.type == CommandType.GOTO:
+            return self.t("cmd.goto", page=cmd.page)
+        return mapping.get(cmd.type, str(cmd))
+
+    # ==================== helpers ====================
 
     def _set_status(self, text: str, color: str):
         self.status_label.config(text=text)
@@ -393,9 +741,20 @@ class PPTVoiceApp:
         self.log_text.config(state=tk.DISABLED)
 
 
+def _parse_locale_from_args() -> str:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--lang", dest="lang", default=None)
+    parser.add_argument("-h", "--help", action="store_true")
+    args, _ = parser.parse_known_args()
+    if args.lang:
+        return normalize_locale(args.lang)
+    return normalize_locale(os.environ.get("PPT_LANG"))
+
+
 def main():
+    locale = _parse_locale_from_args()
     root = tk.Tk()
-    PPTVoiceApp(root)
+    PPTVoiceApp(root, locale=locale)
     root.mainloop()
 
 

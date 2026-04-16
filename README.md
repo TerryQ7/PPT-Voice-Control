@@ -1,20 +1,35 @@
 # PPT Voice Control Assistant / PPT 语音控制助手
 
 Real-time voice-controlled slide navigation for PowerPoint and Keynote.
-Listens to your microphone, recognizes Chinese & English commands, and automatically switches slides — no clicking needed.
+Listens to your microphone, recognizes Chinese and English commands, and automatically switches slides — no clicking needed.
 
 **Default engine: [FunASR Paraformer](https://github.com/modelscope/FunASR)** — high-accuracy offline speech recognition from Alibaba, supporting Chinese–English bilingual input.
 
+Both a **Simplified Chinese** and an **English** edition are shipped. The two share the same engine and code path; only the UI strings differ.
+
+## Downloads
+
+Pre-built Windows binaries for both languages are produced by GitHub Actions and attached to each tagged release. See the [Releases page](../../releases).
+
+| Edition | Asset (Windows, offline, model included) |
+|---|---|
+| English (en-US) | `PPT-Voice-Control-en-US-Windows.zip` |
+| Simplified Chinese (zh-CN) | `PPT-Voice-Control-zh-CN-Windows.zip` |
+
+Each zip is a self-contained bundle — the target machine needs neither Python nor an internet connection.
+
 ## Features
 
-- **Fully offline** — after initial model download, no internet required
-- **Chinese & English** voice commands with Chinese numeral support (e.g. "第二十三页")
+- **Fully offline** — after the initial model download, no internet connection is required
+- **Bilingual UI** — Simplified Chinese (`--lang zh`, default) and English (`--lang en`)
+- **Bilingual speech** — recognizes Chinese & English commands, including Chinese numerals ("第二十三页")
 - **Microphone selection** — choose from available audio input devices in the UI; supports system default or a specific mic
-- **System audio capture (Loopback)** — for remote meeting scenarios, capture speaker output instead of mic input (Windows WASAPI Loopback; macOS requires virtual audio device such as BlackHole)
+- **System audio capture (Loopback)** — for remote-meeting scenarios, capture speaker output instead of mic input (Windows WASAPI Loopback; on macOS install a virtual audio device such as BlackHole)
 - **Smart context filtering** — distinguishes commands from descriptive speech (e.g. "像第三页那样" will NOT trigger a jump, but "跳到第三页" will)
 - **Platform-adaptive VAD** — energy-based voice activity detection with auto-calibrated noise baseline, tuned separately for macOS and Windows
 - **Dual ASR engine** — FunASR Paraformer (high accuracy) or Vosk (lightweight)
 - **Cross-platform** — macOS (Quartz CGEvent) and Windows (pynput) keyboard simulation
+- **Tesla-inspired UI** — flat white canvas, Carbon Dark text, Electric Blue accent, zero shadows, generous whitespace (see [`DESIGN.md`](./DESIGN.md))
 - **One-click packaging** — PyInstaller scripts for macOS & Windows, plus Inno Setup installer for offline Windows distribution
 
 ## Supported Commands
@@ -23,9 +38,10 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 |---|---|
 | "下一页" / "next page" / "next slide" / "forward" | Next slide |
 | "上一页" / "previous page" / "previous one" / "go back" | Previous slide |
-| "第N页" / "回到第N页" / "go to page N" / "first page" / "second page" / "third page" / "twenty-third page" / "one hundred and first page" | Jump to slide N |
+| "第N页" / "回到第N页" / "go to page N" / "first page" / "twenty-third page" / "one hundred and first page" | Jump to slide N |
 | "第一页" / "first page" / "start over" | First slide |
 | "最后一页" / "last slide" / "go to end" | Last slide |
+
 > Chinese numerals are fully supported — e.g. "第二十三页" (page 23), "翻到第一百页" (page 100).
 >
 > English ordinal/cardinal page phrases are also supported — e.g. "first page", "twenty third page", "go to one hundred and first page", "page fifty", "slide ninety ninth".
@@ -45,7 +61,7 @@ Listens to your microphone, recognizes Chinese & English commands, and automatic
 
 ## Quick Start
 
-### 1. Create Virtual Environment
+### 1. Create a virtual environment
 
 ```bash
 # macOS
@@ -69,21 +85,39 @@ pip install -r requirements.txt
 ### 2. Run
 
 ```bash
+# Simplified Chinese (default)
 python main.py
+
+# English
+python main.py --lang en
+# equivalent: python main_en.py
+# equivalent: PPT_LANG=en python main.py
 ```
 
-Open your PPT in **slideshow mode**, click **Start Listening**, and speak your commands.
+Open your PPT in **slideshow mode**, click **Start Listening** / **开始监听**, and speak your commands.
 
-The FunASR model (~1 GB) will be downloaded automatically on first launch via ModelScope. After that, the system runs fully offline.
+The FunASR model (~1 GB) is downloaded automatically on first launch via ModelScope. After that, the system runs fully offline.
 
 ### 3. macOS Permissions
 
 Two permissions are required:
 
-1. **Microphone** — system will prompt automatically on first launch.
+1. **Microphone** — the system will prompt automatically on first launch.
 2. **Accessibility** — required for keyboard simulation. Go to:
    `System Settings → Privacy & Security → Accessibility`
    and add your terminal app (Terminal / iTerm / Cursor) or the packaged `.app`.
+
+## Design Language
+
+The UI follows [`DESIGN.md`](./DESIGN.md), a Tesla-inspired minimal system:
+
+- Single Electric Blue (`#3E6AE1`) accent used only for the primary CTA
+- Pure white canvas with Light Ash (`#F4F4F4`) as the sole alternate surface
+- Carbon Dark / Graphite / Pewter three-tier type hierarchy
+- No shadows, no gradients, no borders — depth is spacing and contrast
+- SF Pro (macOS) / Segoe UI Variable (Windows) as Universal-Sans stand-ins
+
+Both editions render an identical layout; only the text is localised.
 
 ## Architecture
 
@@ -116,19 +150,25 @@ PPT Controller
 
 ```
 PPT_Project/
-├── main.py                        # GUI entry point (tkinter)
-├── asr_engine.py                  # ASR engines: FunASREngine + VoskEngine
-├── command_parser.py              # Voice command parser (Chinese/English, debounce)
-├── ppt_controller.py              # Keyboard simulation (Quartz CGEvent / pynput)
-├── config.py                      # Global configuration (engine, keywords, params)
-├── download_model.py              # Vosk model download utility
-├── requirements.txt               # Python dependencies
-├── build_app.sh                   # macOS packaging (PyInstaller)
-├── build_app_windows.bat          # Windows packaging (PyInstaller)
-├── build_app_windows_offline.bat  # Windows offline packaging (bundles model)
-├── build_installer_offline.iss    # Inno Setup installer script
+├── main.py                         # Bilingual GUI entry point (tkinter, Tesla theme)
+├── main_en.py                      # English-only launcher (used by PyInstaller)
+├── i18n.py                         # Chinese/English string tables
+├── asr_engine.py                   # ASR engines: FunASREngine + VoskEngine
+├── command_parser.py               # Voice command parser (Chinese/English, debounce)
+├── ppt_controller.py               # Keyboard simulation (Quartz CGEvent / pynput)
+├── config.py                       # Global configuration (engine, keywords, params)
+├── download_model.py               # Vosk model download utility
+├── requirements.txt                # Python dependencies
+├── DESIGN.md                       # Tesla-inspired design system
+├── build_app.sh                    # macOS packaging — Chinese edition
+├── build_app_en.sh                 # macOS packaging — English edition
+├── build_app_windows.bat           # Windows packaging — Chinese edition
+├── build_app_windows_en.bat        # Windows packaging — English edition
+├── build_app_windows_offline.bat   # Windows offline packaging (bundles model)
+├── build_installer_offline.iss     # Inno Setup installer script
 └── .github/workflows/
-    └── build-windows.yml          # GitHub Actions CI for Windows build
+    ├── build-windows.yml           # CI — builds both zh and en Windows artefacts
+    └── release.yml                 # Release — on v* tag, uploads zh & en zips
 ```
 
 ## Configuration
@@ -140,7 +180,7 @@ Edit `config.py` to customize:
 | `ASR_ENGINE` | Recognition engine (`"funasr"` or `"vosk"`) | `"funasr"` |
 | `DEBOUNCE_SECONDS` | Min interval between duplicate commands | `2.0` s |
 | `SAMPLE_RATE` | Audio sample rate | `16000` Hz |
-| `NEXT_KEYWORDS`, etc. | Trigger keywords for each command | See file |
+| `NEXT_KEYWORDS`, etc. | Trigger keywords for each command | see file |
 
 ### Switching to Vosk
 
@@ -152,7 +192,7 @@ For a lighter setup (no PyTorch needed, ~42 MB model):
 
 ## Packaging
 
-### macOS
+### macOS — Chinese edition
 
 ```bash
 chmod +x build_app.sh && ./build_app.sh
@@ -160,7 +200,15 @@ chmod +x build_app.sh && ./build_app.sh
 
 Output: `dist/PPT语音控制助手/`
 
-### Windows (online)
+### macOS — English edition
+
+```bash
+chmod +x build_app_en.sh && ./build_app_en.sh
+```
+
+Output: `dist/PPT-Voice-Control/`
+
+### Windows — Chinese edition
 
 ```bash
 build_app_windows.bat
@@ -168,9 +216,17 @@ build_app_windows.bat
 
 Output: `dist/PPT语音控制助手/`
 
+### Windows — English edition
+
+```bash
+build_app_windows_en.bat
+```
+
+Output: `dist/PPT-Voice-Control/`
+
 ### Windows (offline, bundles model)
 
-Builds a standalone package that includes the FunASR model — target machines need no Python or internet.
+Builds a standalone package that includes the FunASR model — target machines need no Python and no internet.
 
 ```bash
 build_app_windows_offline.bat
@@ -185,7 +241,8 @@ To create a Windows installer (requires [Inno Setup](https://jrsoftware.org/isin
 
 ### GitHub Actions
 
-A CI workflow (`.github/workflows/build-windows.yml`) automatically builds the Windows executable on push to `main`. The artifact is uploaded and available for 30 days.
+- `.github/workflows/build-windows.yml` — builds **both** the `zh` and `en` Windows packages on every push to `main` (matrix build). Artifacts are retained for 30 days.
+- `.github/workflows/release.yml` — on any `v*` tag push (e.g. `git tag v1.2.0 && git push --tags`), builds both editions, zips them as `PPT-Voice-Control-zh-CN-Windows.zip` / `PPT-Voice-Control-en-US-Windows.zip`, and attaches them to the matching GitHub Release.
 
 ## License
 
