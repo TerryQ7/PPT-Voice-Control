@@ -1,0 +1,45 @@
+---
+description: Release packaging policy — always ship Windows installers (.exe), never zip archives
+alwaysApply: true
+---
+
+# Release Packaging Policy
+
+Every GitHub Release for this project **must** ship as a pair of signed-style
+Inno Setup Windows installers (`.exe`), one per UI language. **Never** upload
+zip archives, loose PyInstaller folders, or raw executables as release assets.
+
+## Required assets per release
+
+Exactly two files, both produced by `installer.iss` via the `release.yml`
+workflow:
+
+| Language | Upload filename (ASCII-safe, used on GitHub) | Installed product name |
+|----------|----------------------------------------------|------------------------|
+| zh-CN    | `PPT-Voice-Control-zh-CN-Setup-v<version>.exe` | `PPT语音控制助手` (wizard + shortcuts in Chinese) |
+| en-US    | `PPT-Voice-Control-en-US-Setup-v<version>.exe` | `PPT Voice Control` (English wizard) |
+
+> GitHub's Release API sanitizes non-ASCII filenames to dots, so the uploaded
+> asset name is ASCII on purpose. The installer itself and all installed
+> artifacts (shortcuts, install dir, window title) remain localized.
+
+## How to cut a release
+
+1. Commit all changes to `main` and push.
+2. Create an annotated tag `vX.Y.Z` (semantic version — patch for bugfixes,
+   minor for features, major for breaking changes).
+3. Push the tag: `git push origin vX.Y.Z`.
+4. The `release.yml` workflow runs a matrix build (zh + en), installs
+   Inno Setup 6 (plus `ChineseSimplified.isl`), compiles `installer.iss`
+   for each language, renames the zh asset to the ASCII-safe name, and
+   attaches both installers to the Release.
+5. Verify with `gh release view vX.Y.Z --json assets` — you should see
+   **exactly two `.exe` files**, nothing else.
+
+## Do not
+
+- Do not add a zip / tar / 7z job to `release.yml`.
+- Do not upload `dist/` folders or raw `.exe` from PyInstaller.
+- Do not recreate the deprecated `build_installer_offline.iss`. The single
+  parameterized `installer.iss` handles both languages.
+- Do not push a release without bumping the tag version.

@@ -277,10 +277,23 @@ _GOTO_BARE_EN_WORDS_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
-# 命令匹配后的最大额外字符数（超出则视为描述性长句而非命令）
-_MAX_EXTRA_CHARS = 4
+# 长度预算按语言分别设置：
+#   - 中文一字一意，命令本身就 3-4 字（"下一页"），多余信息超过 4 字
+#     基本就不是命令了（"我们下一页吧" 这种边界情况也在 4 字以内）；
+#   - 英文则常带"载体短语"（"continue with next page"、"please go to
+#     next page"、"could you switch to slide three" 等），需要 20+ 字
+#     的余量；过窄会让英文命令直接被丢弃。
+_MAX_EXTRA_CHARS_CN = 4
+_MAX_EXTRA_CHARS_EN = 24
 
-# 第二道防线：描述性上下文正则（挡住长度检测放行的短描述句）
+
+def _is_chinese_token(token: str) -> bool:
+    """判断给定关键词是否为中文（包含至少一个 CJK 字符）。"""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in token)
+
+
+# 第二道防线：描述性上下文正则。中英文各一套，分别只对各自语言的命令生效，
+# 避免英文叙述句被中文规则错误放行（反之亦然）。
 _DESCRIPTIVE_CN = re.compile(
     r"像.*第.+[页张]"
     r"|如同.*第.+[页张]"
@@ -294,8 +307,14 @@ _DESCRIPTIVE_CN = re.compile(
     r"|参[考见照]第.+[页张]"
 )
 _DESCRIPTIVE_EN = re.compile(
-    r"(?:like|as|described|mentioned|shown|see|refer)\s.*(?:page|slide)\s*\d+"
-    r"|(?:page|slide)\s*\d+\s.*(?:described|mentioned|shown|said|stated)",
+    # ① 围绕带数字页码的叙述：as shown on page 3 / like the page 5
+    r"(?:like|as|described|mentioned|shown|see|refer|similar\s+to)\s.*?(?:page|slide)\s*\d+"
+    # ② 数字页码后接叙述动词：page 3 was discussed / slide 5 contains
+    r"|(?:page|slide)\s*\d+\s.*?(?:described|mentioned|shown|said|stated|contains?|shows?|appears?|talked|discussed|presented|displays?)"
+    # ③ 不带数字的叙述句："the next page is interesting" / "previous slide shows ..."
+    r"|\b(?:the|this|that|previous|next|last|first|any|every|each)\s+(?:page|slide)\s+(?:is|was|were|will|would|has|have|had|contains?|shows?|describes?|displays?|presents?|appears?|talks?|discusses?|illustrates?)\b"
+    # ④ 比喻："like the next page" / "similar to the previous slide"
+    r"|\b(?:like|as|similar\s+to)\s+(?:the\s+)?(?:previous|next|last|first|same|other)\s+(?:page|slide)\b",
     re.IGNORECASE,
 )
 
@@ -333,78 +352,69 @@ class CommandParser:
         is_desc_en = bool(_DESCRIPTIVE_EN.search(text_normalized))
 
         # --- 跳转类命令 ---
+        # 中文路径：用中文长度预算 + 中文描述性过滤
+        # 英文路径：用英文长度预算 + 英文描述性过滤
+        # 两条路径完全独立，互不干扰。
 
-        # 1) 中文显式前缀（"跳到第三页"）：长度检测过滤长句
-        match = _GOTO_EXPLICIT_CN.search(text_compact)
-        if match and not is_desc_cn:
-            if len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+        # 1) 中文显式前缀（"跳到第三页"）
+        if not is_desc_cn:
+            match = _GOTO_EXPLICIT_CN.search(text_compact)
+            if match and len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS_CN:
                 page = chinese_to_int(match.group(1))
                 if page is not None and page > 0:
                     return self._page_cmd(page)
 
-        # 2) 中文无前缀（"第三页"）：长度检测 + 描述性正则双重过滤
+        # 2) 中文无前缀（"第三页"）
         if not is_desc_cn:
             match = _GOTO_BARE_CN.search(text_compact)
-            if match:
-                if len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
-                    page = chinese_to_int(match.group(1))
-                    if page is not None and page > 0:
-                        return self._page_cmd(page)
+            if match and len(text_compact) - len(match.group(0)) <= _MAX_EXTRA_CHARS_CN:
+                page = chinese_to_int(match.group(1))
+                if page is not None and page > 0:
+                    return self._page_cmd(page)
 
         # 3) 英文显式前缀（"go to page 3" / "jump to 5"）
         if not is_desc_en:
-            match = _GOTO_EXPLICIT_EN.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+            for pattern in (_GOTO_EXPLICIT_EN, _GOTO_EXPLICIT_EN_SUFFIX):
+                match = pattern.search(text_normalized)
+                if match and len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS_EN:
                     page = int(match.group(1))
                     if page > 0:
                         return self._page_cmd(page)
-            match = _GOTO_EXPLICIT_EN_SUFFIX.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
-                    page = int(match.group(1))
-                    if page > 0:
-                        return self._page_cmd(page)
+
             match = _GOTO_EXPLICIT_EN_WORDS.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
-                    page = english_words_to_int(match.group(1))
-                    if page is not None and page > 0:
-                        return self._page_cmd(page)
+            if match and len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS_EN:
+                page = english_words_to_int(match.group(1))
+                if page is not None and page > 0:
+                    return self._page_cmd(page)
 
         # 4) 英文无前缀（"page 3" / "slide 5"）
         if not is_desc_en:
             match = _GOTO_BARE_EN.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
-                    page = int(match.group(1))
-                    if page > 0:
-                        return self._page_cmd(page)
-            match = _GOTO_BARE_EN_WORDS_PREFIX.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
-                    page = english_words_to_int(match.group(1))
-                    if page is not None and page > 0:
-                        return self._page_cmd(page)
-            match = _GOTO_BARE_EN_WORDS_SUFFIX.search(text_normalized)
-            if match:
-                if len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS:
+            if match and len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS_EN:
+                page = int(match.group(1))
+                if page > 0:
+                    return self._page_cmd(page)
+            for pattern in (_GOTO_BARE_EN_WORDS_PREFIX, _GOTO_BARE_EN_WORDS_SUFFIX):
+                match = pattern.search(text_normalized)
+                if match and len(text_normalized) - len(match.group(0)) <= _MAX_EXTRA_CHARS_EN:
                     page = english_words_to_int(match.group(1))
                     if page is not None and page > 0:
                         return self._page_cmd(page)
 
-        # --- 关键词类命令（同样短句才触发） ---
-        if is_desc_cn or is_desc_en:
-            return None
+        # --- 关键词类命令 ---
+        # _match_keyword 已经按关键词的语言分别检查描述性过滤和长度预算，
+        # 不能再用 ``is_desc_cn or is_desc_en`` 做笼统拦截，否则任意一种语
+        # 言的描述句会顺带屏蔽另一种语言的命令。
 
-        if self._match_keyword(text_compact, text_normalized, LAST_KEYWORDS):
-            return Command(type=CommandType.LAST)
-        if self._match_keyword(text_compact, text_normalized, FIRST_KEYWORDS):
-            return Command(type=CommandType.FIRST)
-        if self._match_keyword(text_compact, text_normalized, NEXT_KEYWORDS):
-            return Command(type=CommandType.NEXT)
-        if self._match_keyword(text_compact, text_normalized, PREV_KEYWORDS):
-            return Command(type=CommandType.PREV)
+        for keywords, cmd_type in (
+            (LAST_KEYWORDS, CommandType.LAST),
+            (FIRST_KEYWORDS, CommandType.FIRST),
+            (NEXT_KEYWORDS, CommandType.NEXT),
+            (PREV_KEYWORDS, CommandType.PREV),
+        ):
+            if self._match_keyword(text_compact, text_normalized,
+                                   keywords, is_desc_cn, is_desc_en):
+                return Command(type=cmd_type)
 
         return None
 
@@ -416,14 +426,29 @@ class CommandParser:
 
     @staticmethod
     def _match_keyword(text_compact: str, text_normalized: str,
-                       keywords: list[str]) -> bool:
-        """关键词匹配：命中后检查文本长度，短句才是命令。"""
+                       keywords: list[str],
+                       is_desc_cn: bool, is_desc_en: bool) -> bool:
+        """关键词匹配，按关键词语言分别使用对应的预算和描述性过滤。
+
+        - 中文关键词在 ``text_compact`` 中匹配，受 ``is_desc_cn`` 拦截，
+          长度溢出阈值为 :data:`_MAX_EXTRA_CHARS_CN`；
+        - 英文关键词在 ``text_normalized``（小写、单空格归一）中匹配，
+          受 ``is_desc_en`` 拦截，长度溢出阈值为
+          :data:`_MAX_EXTRA_CHARS_EN`。
+        """
         for kw in keywords:
-            if kw in text_compact:
-                if len(text_compact) - len(kw) <= _MAX_EXTRA_CHARS:
+            if _is_chinese_token(kw):
+                if is_desc_cn:
+                    continue
+                if kw in text_compact and \
+                        len(text_compact) - len(kw) <= _MAX_EXTRA_CHARS_CN:
                     return True
-            if kw in text_normalized:
-                if len(text_normalized) - len(kw) <= _MAX_EXTRA_CHARS:
+            else:
+                if is_desc_en:
+                    continue
+                kw_lower = kw.lower()
+                if kw_lower in text_normalized and \
+                        len(text_normalized) - len(kw_lower) <= _MAX_EXTRA_CHARS_EN:
                     return True
         return False
 
