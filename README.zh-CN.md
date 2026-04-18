@@ -1,18 +1,16 @@
 # PPT 语音控制助手
 
-为 PowerPoint 与 Keynote 提供"免点击"的语音翻页。程序持续监听麦克风（或在远程会议中监听系统输出），识别中英文命令并自动切换幻灯片，主讲人不再需要鼠标和翻页器。
+为 PowerPoint 与 Keynote 提供"免点击"的语音翻页。程序会持续监听麦克风（或在远程会议中监听系统输出），识别中英文命令并自动切换幻灯片，主讲人不需要鼠标和翻页器。
 
 > English version: [**README.md**](./README.md)
 
-默认识别引擎为 [FunASR Paraformer](https://github.com/modelscope/FunASR)（阿里达摩院的高精度离线 ASR，原生支持中英文混合识别）。轻量场景可切换到 Vosk。
+默认语音识别引擎为 [FunASR Paraformer](https://github.com/modelscope/FunASR)（阿里达摩院的高精度离线 ASR，原生支持中英文混合识别）。
 
-仓库同时发布**简体中文版**与**英文版**两个发行版本，使用同一份代码、同一套引擎，只在 UI 字串上做本地化。
+同时发布有**简体中文版**与**英文版**两个发行版本，使用同一份代码、同一套引擎。
 
 ---
 
 ## 下载
-
-每个 GitHub tag 都会触发 GitHub Actions 自动产出**两个 Windows 安装包**——每种 UI 语言一个。安装向导、安装路径、开始菜单/桌面快捷方式以及程序窗口标题均与所选语言一致。
 
 | 版本     | 界面语言   | GitHub Release 中的资源文件                       |
 |----------|------------|---------------------------------------------------|
@@ -32,13 +30,12 @@
 - **完全离线**：首次启动会自动下载约 1 GB 的模型，之后全程不联网。
 - **双语界面**：简体中文（`--lang zh`，默认）与英文（`--lang en`）。
 - **中英文语音识别**：支持中英文混合命令、中文数字（如 *第二十三页*）和英文基数/序数（如 *twenty-third page*、*page fifty*）。
-- **载体短语容忍**（v1.0.1）：英文里像 *"continue with next page"*、*"we can move on to the next page"* 这种自然口语也能识别。
+- **短语识别**（v1.0.1）：英文里像 *"continue with next page"*、*"we can move on to the next page"* 这种自然口语也能识别。
 - **可选麦克风或系统音频**：UI 中可选择任意输入设备。远程会议时改用 Loopback（Windows WASAPI）或 macOS 上的虚拟声卡（如 [BlackHole](https://github.com/ExistentialAudio/BlackHole)）来捕获扬声器输出。
 - **智能上下文过滤**：*"像第三页那样"*、*"as shown on page 3"* 这种叙述句**不会**触发跳转；只有明确的命令才会切片。
 - **平台自适应 VAD**：基于能量的语音活动检测，启动时自动校准噪声基线，macOS 与 Windows 各自单独调参。
 - **双 ASR 引擎**：默认 FunASR Paraformer（高精度），也可切到 Vosk（轻量，约 42 MB）。
 - **跨平台键盘模拟**：macOS 走 Quartz CGEvent，Windows 走 pynput。
-- **特斯拉风极简 UI**：纯白画布、Carbon Dark 文字、Electric Blue 强调色，无阴影、无渐变、留白克制。详见 [`DESIGN.md`](./DESIGN.md)。
 - **一键打包**：macOS 与 Windows 都有 PyInstaller 脚本；同一份 `installer.iss` 模板支持中英文 Inno Setup 安装包。
 
 ---

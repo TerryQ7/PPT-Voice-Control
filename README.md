@@ -2,7 +2,7 @@
 
 Hands-free slide navigation for PowerPoint and Keynote. The app listens to your microphone (or system audio for remote meetings), recognizes Chinese and English commands, and switches slides for you — no clicking, no remote.
 
-> 简体中文版说明：[**README.zh-CN.md**](./README.zh-CN.md)
+> 中文版：[**README.zh-CN.md**](./README.zh-CN.md)
 
 The default speech engine is [FunASR Paraformer](https://github.com/modelscope/FunASR), Alibaba's high-accuracy offline ASR with native Chinese–English bilingual support. Vosk is available as a lightweight alternative.
 
