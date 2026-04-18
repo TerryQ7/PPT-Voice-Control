@@ -1,74 +1,82 @@
-# PPT Voice Control Assistant / PPT 语音控制助手
+# PPT Voice Control
 
-Real-time voice-controlled slide navigation for PowerPoint and Keynote.
-Listens to your microphone, recognizes Chinese and English commands, and automatically switches slides — no clicking needed.
+Hands-free slide navigation for PowerPoint and Keynote. The app listens to your microphone (or system audio for remote meetings), recognizes Chinese and English commands, and switches slides for you — no clicking, no remote.
 
-**Default engine: [FunASR Paraformer](https://github.com/modelscope/FunASR)** — high-accuracy offline speech recognition from Alibaba, supporting Chinese–English bilingual input.
+> 简体中文版说明：[**README.zh-CN.md**](./README.zh-CN.md)
 
-Both a **Simplified Chinese** and an **English** edition are shipped. The two share the same engine and code path; only the UI strings differ.
+The default speech engine is [FunASR Paraformer](https://github.com/modelscope/FunASR), Alibaba's high-accuracy offline ASR with native Chinese–English bilingual support. Vosk is available as a lightweight alternative.
+
+A **Simplified Chinese edition** and an **English edition** are shipped from the same codebase; only the UI strings differ.
+
+---
 
 ## Downloads
 
-Pre-built Windows installers for both languages are produced by GitHub Actions and attached to each tagged release. See the [Releases page](../../releases).
+Each tagged release on GitHub Actions ships **two Windows installers** — one per UI language. The setup wizard, install path, shortcuts, and window title all follow the chosen language.
 
-| Edition | Release asset (Windows, offline, model included) | Local build output |
-|---|---|---|
-| Simplified Chinese (zh-CN) | `PPT-Voice-Control-zh-CN-Setup-v<version>.exe` | `PPT语音控制助手-安装程序-v<version>.exe` |
-| English (en-US) | `PPT-Voice-Control-en-US-Setup-v<version>.exe` | `PPT-Voice-Control-Setup-v<version>.exe` |
+| Edition  | UI language | GitHub Release asset                              |
+|----------|-------------|---------------------------------------------------|
+| zh-CN    | 简体中文     | `PPT-Voice-Control-zh-CN-Setup-v<version>.exe`    |
+| en-US    | English     | `PPT-Voice-Control-en-US-Setup-v<version>.exe`    |
 
-Each installer is a self-contained bundle — the target machine needs neither Python nor an internet connection. The setup wizard is itself bilingual (Chinese installer ships a 简体中文 wizard, English installer ships an English wizard) and creates Start-menu and optional desktop shortcuts. Both editions use distinct App IDs and install paths, so they can coexist on the same machine. Once installed, the Chinese edition's window title, install directory, and shortcut all read `PPT语音控制助手`.
+Latest stable: **[v1.0.1 release page](../../releases/latest)** · all versions: **[Releases](../../releases)**.
 
-> ℹ️ GitHub Releases sanitises non-ASCII characters in asset URLs, so the Chinese installer is uploaded with an ASCII-safe `zh-CN` marker. When you build locally with `installer.iss`, the file keeps its native Chinese name.
+Each installer is a fully self-contained Inno Setup wizard (~950 MB) that bundles the FunASR model — the target machine needs neither Python nor internet access. Both editions use distinct App IDs and install paths, so they can coexist on the same machine.
 
-## Features
+> ℹ️ GitHub Releases sanitises non-ASCII characters in asset URLs, so the Chinese installer is uploaded with an ASCII-safe `zh-CN` marker. Once installed, the program itself shows up as `PPT语音控制助手` everywhere (Start menu, install directory, window title). When you build locally with `installer.iss`, the file keeps its native Chinese name `PPT语音控制助手-安装程序-v<version>.exe`.
 
-- **Fully offline** — after the initial model download, no internet connection is required
-- **Bilingual UI** — Simplified Chinese (`--lang zh`, default) and English (`--lang en`)
-- **Bilingual speech** — recognizes Chinese & English commands, including Chinese numerals ("第二十三页")
-- **Microphone selection** — choose from available audio input devices in the UI; supports system default or a specific mic
-- **System audio capture (Loopback)** — for remote-meeting scenarios, capture speaker output instead of mic input (Windows WASAPI Loopback; on macOS install a virtual audio device such as BlackHole)
-- **Smart context filtering** — distinguishes commands from descriptive speech (e.g. "像第三页那样" will NOT trigger a jump, but "跳到第三页" will)
-- **Platform-adaptive VAD** — energy-based voice activity detection with auto-calibrated noise baseline, tuned separately for macOS and Windows
-- **Dual ASR engine** — FunASR Paraformer (high accuracy) or Vosk (lightweight)
-- **Cross-platform** — macOS (Quartz CGEvent) and Windows (pynput) keyboard simulation
-- **Tesla-inspired UI** — flat white canvas, Carbon Dark text, Electric Blue accent, zero shadows, generous whitespace (see [`DESIGN.md`](./DESIGN.md))
-- **One-click packaging** — PyInstaller scripts for macOS & Windows, plus Inno Setup installer for offline Windows distribution
+---
 
-## Supported Commands
+## Highlights
 
-| Voice Command | Action |
+- **Fully offline.** After the first-launch model download (~1 GB), no internet is required.
+- **Bilingual UI.** Simplified Chinese (`--lang zh`, default) and English (`--lang en`).
+- **Bilingual speech recognition.** Mixed Chinese / English commands work, including Chinese numerals like *第二十三页* and English ordinals like *twenty-third page*.
+- **Carrier-phrase tolerance.** Natural English presenter speech such as *"continue with next page"* or *"we can move on to the next page"* works out of the box. (Fixed in v1.0.1.)
+- **Microphone or system audio.** Pick any input device in the UI. For remote meetings, use a Loopback device (Windows WASAPI) or a virtual driver such as [BlackHole](https://github.com/ExistentialAudio/BlackHole) on macOS to capture speaker output.
+- **Smart context filtering.** *"像第三页那样"* / *"as shown on page 3"* will **not** trigger a jump; only explicit commands do.
+- **Platform-adaptive VAD.** Energy-based voice-activity detection with auto-calibrated noise baseline, tuned separately for macOS and Windows.
+- **Dual ASR engine.** FunASR Paraformer (high accuracy, default) or Vosk (lightweight, ~42 MB).
+- **Cross-platform.** macOS (Quartz CGEvent) and Windows (pynput) keyboard simulation.
+- **Tesla-inspired UI.** Pure white canvas, Carbon Dark text, Electric Blue accent, zero shadows, generous whitespace. See [`DESIGN.md`](./DESIGN.md).
+- **One-click packaging.** PyInstaller scripts for macOS and Windows, plus a parameterized Inno Setup template for both languages.
+
+---
+
+## Voice commands
+
+| Spoken phrase | Action |
 |---|---|
-| "下一页" / "next page" / "next slide" / "forward" | Next slide |
-| "上一页" / "previous page" / "previous one" / "go back" | Previous slide |
-| "第N页" / "回到第N页" / "go to page N" / "first page" / "twenty-third page" / "one hundred and first page" | Jump to slide N |
-| "第一页" / "first page" / "start over" | First slide |
-| "最后一页" / "last slide" / "go to end" | Last slide |
+| *下一页* / *next page* / *next slide* / *forward* / *continue with next page* | Next slide |
+| *上一页* / *previous page* / *previous slide* / *go back* | Previous slide |
+| *第N页* / *跳到第N页* / *go to page N* / *jump to slide N* / *page fifty* | Jump to slide N |
+| *第一页* / *first page* / *start over* | First slide |
+| *最后一页* / *last slide* / *go to end* | Last slide |
 
-> Chinese numerals are fully supported — e.g. "第二十三页" (page 23), "翻到第一百页" (page 100).
->
-> English ordinal/cardinal page phrases are also supported — e.g. "first page", "twenty third page", "go to one hundred and first page", "page fifty", "slide ninety ninth".
->
-> **Context-aware filtering**: The system distinguishes commands from descriptive speech. Saying "像第三页描述的那样" or "as shown on page 3" will NOT trigger a page jump. Only explicit commands like "第三页", "跳到第三页", or "go to page 3" will navigate.
+- Chinese numerals are fully supported, e.g. *第二十三页* (page 23), *翻到第一百页* (page 100).
+- English cardinals and ordinals are supported, e.g. *go to page fifty*, *twenty-third page*, *one hundred and first page*, *slide ninety-ninth*.
+- **Context-aware filter.** Narrative speech is rejected: *像第三页描述的那样*, *the next page is interesting*, *as shown on page 3*, *similar to the previous slide* will not navigate.
 
-### Important Notes
+### Important
 
-- **PowerPoint must be the foreground window** — the application sends keyboard events to the active window. If PPT is not in focus, commands will not reach it.
-- **Remote meetings**: When presenting remotely (Zoom/Teams/etc.), the remote audience's voice comes through speakers, not the mic. Select a **Loopback** audio device to capture system audio output. On Windows, WASAPI loopback devices appear automatically. On macOS, install a virtual audio device like [BlackHole](https://github.com/ExistentialAudio/BlackHole).
+- **PowerPoint must be the foreground window** — the app sends keyboard events to the active window. If PPT is not in focus, commands will not reach it.
+- **Remote meetings.** Voice from the audience comes through speakers, not your microphone. Pick a Loopback / virtual audio device in the input selector.
 
-## Requirements
+---
+
+## Quick start (development)
+
+### Requirements
 
 - Python 3.10+
 - macOS or Windows
 - Microphone
 
-## Quick Start
-
-### 1. Create a virtual environment
+### Install
 
 ```bash
 # macOS
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 
 # Windows
 python -m venv venv
@@ -79,12 +87,13 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-> **macOS note:** If you see `No module named '_tkinter'`:
+> **macOS note.** If you see `No module named '_tkinter'`:
+>
 > ```bash
 > brew install python-tk@3.13   # match your Python version
 > ```
 
-### 2. Run
+### Run
 
 ```bash
 # Simplified Chinese (default)
@@ -96,149 +105,116 @@ python main.py --lang en
 # equivalent: PPT_LANG=en python main.py
 ```
 
-Open your PPT in **slideshow mode**, click **Start Listening** / **开始监听**, and speak your commands.
+Open your slides in **slideshow mode**, click **Start Listening** / **开始监听**, and start speaking.
 
-The FunASR model (~1 GB) is downloaded automatically on first launch via ModelScope. After that, the system runs fully offline.
+The FunASR model (~1 GB) is downloaded on first launch via ModelScope. After that, the system runs fully offline.
 
-### 3. macOS Permissions
+### macOS permissions
 
-Two permissions are required:
+1. **Microphone** — granted via the standard system prompt on first launch.
+2. **Accessibility** — required for keyboard simulation. Open `System Settings → Privacy & Security → Accessibility` and add your terminal app (Terminal / iTerm / Cursor) or the packaged `.app`.
 
-1. **Microphone** — the system will prompt automatically on first launch.
-2. **Accessibility** — required for keyboard simulation. Go to:
-   `System Settings → Privacy & Security → Accessibility`
-   and add your terminal app (Terminal / iTerm / Cursor) or the packaged `.app`.
+---
 
-## Design Language
+## Configuration
 
-The UI follows [`DESIGN.md`](./DESIGN.md), a Tesla-inspired minimal system:
+Edit `config.py`:
 
-- Single Electric Blue (`#3E6AE1`) accent used only for the primary CTA
-- Pure white canvas with Light Ash (`#F4F4F4`) as the sole alternate surface
-- Carbon Dark / Graphite / Pewter three-tier type hierarchy
-- No shadows, no gradients, no borders — depth is spacing and contrast
-- SF Pro (macOS) / Segoe UI Variable (Windows) as Universal-Sans stand-ins
+| Option | Description | Default |
+|---|---|---|
+| `ASR_ENGINE` | `"funasr"` (default) or `"vosk"` | `"funasr"` |
+| `DEBOUNCE_SECONDS` | Min interval between duplicate commands | `2.0` |
+| `SAMPLE_RATE` | Audio sample rate | `16000` Hz |
+| `NEXT_KEYWORDS`, `PREV_KEYWORDS`, `FIRST_KEYWORDS`, `LAST_KEYWORDS` | Per-command trigger keywords | see file |
 
-Both editions render an identical layout; only the text is localised.
+### Switching to Vosk
+
+For a lighter setup (no PyTorch, ~42 MB model):
+
+1. Set `ASR_ENGINE = "vosk"` in `config.py`.
+2. Run `python download_model.py` to fetch the Vosk model.
+3. Run `python main.py`.
+
+---
 
 ## Architecture
 
 ```
 Audio Source (user-selectable)
-    ├── Microphone (local presentation)
-    └── System Audio / Loopback (remote meeting)
-    ↓
-Audio Capture (sounddevice, 100ms chunks, configurable device)
-    ↓
+   ├── Microphone (local presentation)
+   └── System Audio / Loopback (remote meeting)
+        ↓
+Audio Capture (sounddevice, 100ms chunks)
+        ↓
 Voice Activity Detection (energy-based, platform-adaptive)
-    ├── Auto noise calibration on startup (~0.6s)
-    ├── Relative-peak energy for end-of-speech detection
-    └── Forced 2.5s timeout as safety net
-    ↓
+   ├── Auto noise calibration on startup (~0.6 s)
+   ├── Relative-peak energy for end-of-speech detection
+   └── Forced 2.5 s timeout safety net
+        ↓
 Speech Recognition (FunASR Paraformer / Vosk)
-    ↓
+        ↓
 Command Parser
-    ├── Keyword matching (Chinese + English, expanded vocabulary)
-    ├── Regex-based page jump ("第N页" / "go to page N")
-    ├── Descriptive context filter (suppresses "像第三页那样" etc.)
-    └── Debounce (2s dedup)
-    ↓
+   ├── Keyword matching (per-language length budget)
+   ├── Regex page-jump (Chinese numerals + English cardinals/ordinals)
+   ├── Per-language descriptive-context filter
+   └── 2 s debounce
+        ↓
 PPT Controller
-    ├── macOS: Quartz CGEvent (low-level hardware key events)
-    └── Windows: pynput keyboard simulation
+   ├── macOS: Quartz CGEvent (low-level hardware key events)
+   └── Windows: pynput keyboard simulation
 ```
 
-## Project Structure
+### Project layout
 
 ```
 PPT_Project/
 ├── main.py                         # Bilingual GUI entry point (tkinter, Tesla theme)
 ├── main_en.py                      # English-only launcher (used by PyInstaller)
-├── i18n.py                         # Chinese/English string tables
+├── i18n.py                         # Chinese / English string tables
 ├── asr_engine.py                   # ASR engines: FunASREngine + VoskEngine
-├── command_parser.py               # Voice command parser (Chinese/English, debounce)
+├── command_parser.py               # Voice command parser
 ├── ppt_controller.py               # Keyboard simulation (Quartz CGEvent / pynput)
-├── config.py                       # Global configuration (engine, keywords, params)
+├── config.py                       # Global configuration
 ├── download_model.py               # Vosk model download utility
 ├── requirements.txt                # Python dependencies
 ├── DESIGN.md                       # Tesla-inspired design system
-├── build_app.sh                    # macOS packaging — Chinese edition
-├── build_app_en.sh                 # macOS packaging — English edition
-├── build_app_windows.bat           # Windows packaging — Chinese edition
-├── build_app_windows_en.bat        # Windows packaging — English edition
-├── build_app_windows_offline.bat   # Windows offline packaging (bundles model)
 ├── installer.iss                   # Bilingual Inno Setup template (zh / en)
+├── build_app.sh / build_app_en.sh  # macOS PyInstaller scripts
+├── build_app_windows.bat /
+│   build_app_windows_en.bat        # Windows PyInstaller scripts
+├── build_app_windows_offline.bat   # Windows offline packaging
 └── .github/workflows/
-    ├── build-windows.yml           # CI — builds both zh and en Windows artefacts
+    ├── build-windows.yml           # CI — builds zh and en Windows artifacts on each push
     └── release.yml                 # Release — on v* tag, builds both installers and uploads them
 ```
 
-## Configuration
-
-Edit `config.py` to customize:
-
-| Option | Description | Default |
-|---|---|---|
-| `ASR_ENGINE` | Recognition engine (`"funasr"` or `"vosk"`) | `"funasr"` |
-| `DEBOUNCE_SECONDS` | Min interval between duplicate commands | `2.0` s |
-| `SAMPLE_RATE` | Audio sample rate | `16000` Hz |
-| `NEXT_KEYWORDS`, etc. | Trigger keywords for each command | see file |
-
-### Switching to Vosk
-
-For a lighter setup (no PyTorch needed, ~42 MB model):
-
-1. Set `ASR_ENGINE = "vosk"` in `config.py`
-2. Run `python download_model.py` to download the Vosk model
-3. Run `python main.py`
+---
 
 ## Packaging
 
-### macOS — Chinese edition
+### macOS
 
 ```bash
-chmod +x build_app.sh && ./build_app.sh
+chmod +x build_app.sh    && ./build_app.sh        # Chinese  → dist/PPT语音控制助手/
+chmod +x build_app_en.sh && ./build_app_en.sh     # English  → dist/PPT-Voice-Control/
 ```
 
-Output: `dist/PPT语音控制助手/`
+### Windows (PyInstaller folder)
 
-### macOS — English edition
-
-```bash
-chmod +x build_app_en.sh && ./build_app_en.sh
+```bat
+build_app_windows.bat        :: Chinese  -> dist\PPT语音控制助手\
+build_app_windows_en.bat     :: English  -> dist\PPT-Voice-Control\
 ```
 
-Output: `dist/PPT-Voice-Control/`
+### Windows (offline bundle with model)
 
-### Windows — Chinese edition
-
-```bash
-build_app_windows.bat
+```bat
+build_app_windows_offline.bat   :: -> release\PPT-Voice-Control-Offline\ + .zip
 ```
 
-Output: `dist/PPT语音控制助手/`
+### Windows installer (.exe) — local build
 
-### Windows — English edition
-
-```bash
-build_app_windows_en.bat
-```
-
-Output: `dist/PPT-Voice-Control/`
-
-### Windows (offline, bundles model)
-
-Builds a standalone package that includes the FunASR model — target machines need no Python and no internet.
-
-```bash
-build_app_windows_offline.bat
-```
-
-Output: `release/PPT-Voice-Control-Offline/` + `.zip`
-
-### Building installers locally
-
-Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) on Windows.
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php). The Chinese build also needs `ChineseSimplified.isl` (download from [jrsoftware/issrc](https://github.com/jrsoftware/issrc/blob/main/Files/Languages/Unofficial/ChineseSimplified.isl) into the Inno Setup `Languages` folder).
 
 ```bat
 :: 1. Build the PyInstaller bundle for the language you want.
@@ -249,23 +225,27 @@ build_app_windows_en.bat         :: English
 :: 2. Stage the build output where the installer expects it.
 xcopy /E /I /Y "dist\PPT语音控制助手"      installer_staging
 :: or for English:
-:: xcopy /E /I /Y "dist\PPT-Voice-Control" installer_staging
+xcopy /E /I /Y "dist\PPT-Voice-Control"   installer_staging
 
 :: 3. Compile the bilingual installer template.
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=zh /DMyAppVersion=1.0.0 installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=zh /DMyAppVersion=1.0.1 installer.iss
 :: or:
-:: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=en /DMyAppVersion=1.0.0 installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppLang=en /DMyAppVersion=1.0.1 installer.iss
 ```
 
 Outputs land in `release/`:
 
-- `PPT语音控制助手-安装程序-v1.0.0.exe`
-- `PPT-Voice-Control-Setup-v1.0.0.exe`
+- `PPT语音控制助手-安装程序-v1.0.1.exe` (Chinese, native filename)
+- `PPT-Voice-Control-Setup-v1.0.1.exe` (English)
 
 ### GitHub Actions
 
-- `.github/workflows/build-windows.yml` — builds **both** the `zh` and `en` Windows packages on every push to `main` (matrix build). Artifacts are retained for 30 days.
-- `.github/workflows/release.yml` — on any `v*` tag push (e.g. `git tag v1.0.0 && git push --tags`), builds both editions, runs Inno Setup to produce installers (`PPT语音控制助手-安装程序-v1.0.0.exe` / `PPT-Voice-Control-Setup-v1.0.0.exe`), and attaches them to the matching GitHub Release.
+- **`build-windows.yml`** — builds the `zh` and `en` Windows PyInstaller bundles on every push to `main` (matrix build). Artifacts retained for 30 days.
+- **`release.yml`** — on any `v*` tag push (e.g. `git tag v1.0.2 && git push origin v1.0.2`), builds both editions, compiles `installer.iss` for each language, and attaches the resulting `.exe` files to the matching GitHub Release. The Chinese installer is renamed to the ASCII-safe `PPT-Voice-Control-zh-CN-Setup-v<version>.exe` for upload (the wizard and installed product remain Chinese).
+
+> Per repository policy, every release ships **exactly two `.exe` installers** (zh + en). No zip, no loose binaries. See `.cursor/rules/release-packaging.mdc`.
+
+---
 
 ## License
 
