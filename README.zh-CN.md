@@ -19,9 +19,6 @@
 
 最新正式版：**[v1.0.1 发布页](../../releases/latest)** · 历史版本：**[Releases](../../releases)**。
 
-每个安装包都是完整的 Inno Setup 向导（约 950 MB），内置 FunASR 模型——目标机器**不需要安装 Python，也不需要联网**。两种版本使用不同的 AppId 和安装路径，可在同一台机器上共存。
-
-> ℹ️ GitHub Releases 服务端会把资源 URL 中的非 ASCII 字符替换为 `.`，所以中文版安装包以 ASCII 形式（带 `zh-CN` 标识）上传。**安装完成后**，无论是开始菜单、安装目录还是窗口标题，都仍然是 `PPT语音控制助手`。如果用 `installer.iss` 在本地编译，文件名会保留原生的 `PPT语音控制助手-安装程序-v<version>.exe`。
 
 ---
 
